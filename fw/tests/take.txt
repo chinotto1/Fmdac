@@ -1,4 +1,4 @@
-# Fmdac 0.6: C is the kick of this kit. Three hits a half second apart quantize to 120.
+# Fmdac 0.7: C is the kick of this kit. Three hits a half second apart quantize to 120.
 40 shot
 500 keys 128
 900 keys 0

@@ -1,4 +1,4 @@
-# Fmdac 0.6: EDIT three times opens this kit's map. K1 walks the published maps. C plays lane 0.
+# Fmdac 0.7 still walks the first seven maps. EDIT three times opens this kit's map. K1 walks them. C plays lane 0.
 40 btn 6
 80 btn 6
 120 btn 6

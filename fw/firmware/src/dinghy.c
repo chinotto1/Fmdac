@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Fmdac 0.6. Four kit tracks, a sequencer, and the converter.
+/* Fmdac 0.7. Four kit tracks, a sequencer, and the converter.
  *
  *   FX     machine, bits, rate, tone. Press FX again: wet, drive, bits, rate.
  *          The law is on the headphones. While a computer streams USB audio,
@@ -18,10 +18,12 @@
  *          PLAY walks the chain when the length is more than one.
  *   EDIT   tune, decay, snap, drop of the lane. Press EDIT again: the
  *          notes of four lanes. Press EDIT again: this kit's map.
- *          The notes are the published maps of the instruments OCTACHRON
- *          maps to (GM, TR-909, TR-707, TR-727, TR-08, Volca Beats) and
- *          the Hammerhead list its author posted. This is not every
- *          preset stored inside the OCTACHRON app.
+ *          K1 keeps GM, TR-909, TR-707, TR-727, TR-08, Volca Beats, and
+ *          the grouped Hammerhead list, then the AUv3 app maps from the
+ *          OCTACHRON list. The app notes are the public chart that
+ *          matches the lists its author posted. A blank lane sends
+ *          nothing. OneShot and Tekno have no fixed published chart.
+ *          This is not every preset stored inside the OCTACHRON app.
  *   ARP    up, down, up-down, random, chord, and as-played. Press ARP again
  *          to latch the held keys. The keys play the sine only on this page.
  *   LFO    MIDI CC, and level or tune on this mix when DEST says so.
@@ -149,7 +151,18 @@ static const char *const NTN[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "
  *   the instrument sends. The original TR-808 has no MIDI.
  * Volca Beats: Korg MIDI implementation, notes 36, 38, 39, 42, 43, 46,
  *   49, 50, 67, and 75. Part level is CC 40 through 49.
- * Hammerhead: the eight notes Markus Teufel posted for OCTACHRON. */
+ * Hammerhead: the eight notes Markus Teufel posted for OCTACHRON,
+ *   grouped here as kick, snare, hat, then the other four. HAMR2 later
+ *   in this list is the same eight notes in his row order.
+ *
+ * Everything after HAMR is an AUv3 app map from the public list that
+ * matches the OCTACHRON app screen and the note rows its author posted
+ * (Hammerhead, Koala 2x8, Koala 4x4, Splat-to-Clat, Korg Gadget
+ * Amsterdam). Screen names are short. The hint names the app. GM8 and
+ * GM16 use channel 10. The other app maps use channel 1. A 0 is an
+ * empty lane: it does not play and it does not send. OneShot and Tekno
+ * are not here; those apps do not publish a fixed note chart. Indices
+ * 0 through 6 stay the charts above, so a saved kit keeps its map. */
 static const uint8_t MAP_GM_A[8] = {36, 38, 42, 45, 39, 46, 37, 49};
 static const uint8_t MAP_GM_B[8] = {41, 47, 48, 50, 51, 56, 54, 75};
 static const uint8_t MAP_909_A[8] = {36, 38, 42, 41, 39, 46, 37, 49};
@@ -168,6 +181,97 @@ static const char *const LAB_08_B[8] = {"MTOM", "HTOM", "COWB", "HCG", "MCG", "L
 static const char *const LAB_VB_A[8] = {"KICK", "SNARE", "HAT", "LTOM", "CLAP", "OHAT", "HTOM", "CRASH"};
 static const char *const LAB_VB_B[8] = {"KICK", "SNARE", "HAT", "HTOM", "CLAP", "OHAT", "AGOG", "CLAV"};
 static const char *const LAB_HH[8] = {"KICK", "SNARE", "HAT", "RIM", "CLAP", "OHAT", "SNR2", "BELL"};
+/* Shared pages. FAC, Bilbao, and Recife are pads 36 through 51.
+ * London is the first eight of that run. Digistix and NS2 Slate are
+ * 48 through 63, with different lane names. */
+static const uint8_t N36A[8] = {36, 37, 38, 39, 40, 41, 42, 43};
+static const uint8_t N36B[8] = {44, 45, 46, 47, 48, 49, 50, 51};
+static const uint8_t N48A[8] = {48, 49, 50, 51, 52, 53, 54, 55};
+static const uint8_t N48B[8] = {56, 57, 58, 59, 60, 61, 62, 63};
+#define LNONE "----"
+static const char *const PAD_A[8] = {"1", "2", "3", "4", "5", "6", "7", "8"};
+static const char *const PAD_B[8] = {"9", "10", "11", "12", "13", "14", "15", "16"};
+static const uint8_t MAP_AR_A[8] = {36, 37, 38, 39, 40, 41, 42, 43};
+static const uint8_t MAP_AR_B[8] = {44, 45, 46, 0, 0, 0, 0, 0};
+static const char *const LAB_AR_A[8] = {"KICK", "SNARE", "CLHH", "OPHH", "RIM", "CLAP", "LTOM", "MTOM"};
+static const char *const LAB_AR_B[8] = {"HTOM", "RIDE", "CRASH", LNONE, LNONE, LNONE, LNONE, LNONE};
+static const uint8_t MAP_AX_A[8] = {36, 37, 38, 39, 40, 41, 42, 0};
+static const char *const LAB_AX_A[8] = {"1", "2", "3", "4", "5", "6", "7", LNONE};
+/* Blip Box and General MIDI 16 use the same sixteen notes and names. */
+static const uint8_t MAP_BL_A[8] = {35, 36, 37, 38, 39, 40, 41, 42};
+static const uint8_t MAP_BL_B[8] = {43, 44, 45, 46, 47, 48, 49, 50};
+static const char *const LAB_BL_A[8] = {"KICK2", "KICK", "RIM", "SNARE", "CLAP", "SNR2", "LT2", "CLHH"};
+static const char *const LAB_BL_B[8] = {"LTOM", "PDHH", "MT2", "OPHH", "MTOM", "HT2", "CRASH", "HTOM"};
+static const uint8_t MAP_DA_B[8] = {44, 45, 46, 47, 0, 0, 0, 0};
+static const char *const LAB_DA_B[8] = {"9", "10", "11", "12", LNONE, LNONE, LNONE, LNONE};
+static const char *const LAB_DI_A[8] = {"KICK", "SNARE", "CLHH", "OPHH", "KICK2", "CLAP", "RIM", "STICK"};
+static const char *const LAB_DI_B[8] = {"HTOM", "MTOM", "LTOM", "BUZZ", "CRASH", "SHKR", "RIDE", "TAMB"};
+static const uint8_t MAP_DM_A[8] = {36, 38, 42, 46, 39, 37, 56, 43};
+static const uint8_t MAP_DM_B[8] = {49, 0, 0, 0, 0, 0, 0, 0};
+static const char *const LAB_DM_A[8] = {"KICK", "SNARE", "CLHH", "OPHH", "CLAP", "RIM", "COWB", "TOM"};
+static const char *const LAB_DM_B[8] = {"CYM", LNONE, LNONE, LNONE, LNONE, LNONE, LNONE, LNONE};
+static const uint8_t MAP_DC_A[8] = {44, 32, 83, 24, 36, 47, 65, 55};
+static const uint8_t MAP_606_A[8] = {36, 38, 43, 47, 50, 37, 39, 0};
+static const char *const LAB_606_A[8] = {"BASS", "SNARE", "LTOM", "HTOM", "CYM", "OPHH", "CLHH", LNONE};
+static const uint8_t MAP_808_A[8] = {36, 38, 43, 47, 50, 37, 39, 56};
+static const uint8_t MAP_808_B[8] = {49, 46, 42, 0, 0, 0, 0, 0};
+static const char *const LAB_808_A[8] = {"BD", "SD", "LT", "MT", "HT", "RS", "CP", "CB"};
+static const char *const LAB_808_B[8] = {"CY", "OH", "CH", LNONE, LNONE, LNONE, LNONE, LNONE};
+static const uint8_t MAP_E909_A[8] = {36, 38, 43, 50, 39, 56, 49, 42};
+static const char *const LAB_E909_A[8] = {"BASS", "SNARE", "LTOM", "HTOM", "CLAP", "OPHH", "CLHH", "RIDE"};
+static const uint8_t MAP_G8_A[8] = {36, 38, 39, 45, 47, 48, 42, 46};
+static const char *const LAB_G8_A[8] = {"KICK", "SNARE", "CLAP", "LTOM", "MTOM", "HTOM", "CLHH", "OPHH"};
+static const uint8_t MAP_H2_A[8] = {36, 38, 39, 45, 48, 50, 42, 46};
+static const char *const LAB_H2_A[8] = {"KICK", "SNARE", "CLAP", "RIM", "SNR2", "COWB", "CLHH", "OPHH"};
+static const uint8_t MAP_K28_A[8] = {44, 45, 46, 47, 48, 49, 50, 51};
+static const uint8_t MAP_K28_B[8] = {36, 37, 38, 39, 40, 41, 42, 43};
+static const uint8_t MAP_K44_A[8] = {48, 49, 50, 51, 44, 45, 46, 47};
+static const uint8_t MAP_K44_B[8] = {40, 41, 42, 43, 36, 37, 38, 39};
+static const uint8_t MAP_AMS_A[8] = {36, 37, 38, 39, 0, 0, 0, 0};
+static const char *const LAB_AMS_A[8] = {"1", "2", "3", "4", LNONE, LNONE, LNONE, LNONE};
+static const uint8_t MAP_GL_A[8] = {36, 37, 38, 39, 40, 41, 42, 43};
+static const uint8_t MAP_GL_B[8] = {44, 45, 0, 0, 0, 0, 0, 0};
+static const char *const LAB_GL_A[8] = {"KICK", "SNARE", "SNR2", "HHCL", "HHOP", "HTOM", "MTOM", "LTOM"};
+static const char *const LAB_GL_B[8] = {"CRASH", "RIDE", LNONE, LNONE, LNONE, LNONE, LNONE, LNONE};
+static const uint8_t MAP_TK_A[8] = {36, 37, 38, 39, 0, 0, 0, 0};
+static const char *const LAB_TK_A[8] = {"BD201", "SD302", "TOM404", "PCS503", LNONE, LNONE, LNONE, LNONE};
+static const uint8_t MAP_MV_A[8] = {60, 61, 62, 63, 64, 65, 66, 67};
+static const uint8_t MAP_MV_B[8] = {68, 69, 70, 71, 72, 73, 74, 75};
+static const char *const LAB_MV_A[8] = {"BD", "SN", "CLP", "LT", "MT", "HT", "RS", "CB"};
+static const char *const LAB_MV_B[8] = {"CYM", "OH", "CH", "LC", "MC", "HC", "CLV", "MRC"};
+static const char *const LAB_NS_A[8] = {"BD", "SD", "HHCL", "HHOP", "BD2", "CP2", "HHCL2", "HHOP2"};
+static const char *const LAB_NS_B[8] = {"CRASH", "CRS2", "RIDE", "RID2", "TOM1", "TOM2", "TOM3", "TOM4"};
+static const uint8_t MAP_AC_A[8] = {36, 35, 38, 40, 41, 43, 45, 47};
+static const uint8_t MAP_AC_B[8] = {37, 39, 56, 44, 42, 46, 49, 51};
+static const char *const LAB_AC_A[8] = {"BD", "BD2", "SD", "SD2", "LT", "HT", "LC", "HC"};
+static const char *const LAB_AC_B[8] = {"RIM", "CLP", "CB", "MA", "HH", "OH", "OR", "RIDE"};
+static const uint8_t MAP_RU_A[8] = {49, 51, 54, 56, 58, 61, 63, 66};
+static const char *const LAB_RU_A[8] = {"KICK", "SNARE", "CLAP", "LTOM", "MTOM", "HTOM", "CLHH", "OPHH"};
+static const uint8_t MAP_RF_A[8] = {49, 51, 54, 56, 58, 61, 0, 0};
+static const char *const LAB_RF_A[8] = {"KICK", "SNARE", "FX1", "FX2", "FX3", "HAT", LNONE, LNONE};
+static const uint8_t MAP_SX_A[8] = {60, 61, 62, 65, 64, 63, 66, 67};
+static const uint8_t MAP_SX_B[8] = {68, 0, 0, 0, 0, 0, 0, 0};
+static const char *const LAB_SX_A[8] = {"KICK", "SNARE", "CLHH", "OPHH", "LTOM", "HTOM", "CLAP", "TAMB"};
+static const char *const LAB_SX_B[8] = {"NOISE", LNONE, LNONE, LNONE, LNONE, LNONE, LNONE, LNONE};
+static const char *const LAB_SI_A[8] = {"KICK", "SNARE", "CLHH", "OPHH", "CYM", "LTOM", "MTOM", "HTOM"};
+static const char *const LAB_SI_B[8] = {"LCONG", "MCONG", "HCONG", "CLAP", "CLAV", "MAR", "COWB", "RIM"};
+static const uint8_t MAP_SP_A[8] = {60, 61, 62, 63, 64, 65, 66, 67};
+static const uint8_t MAP_SP_B[8] = {68, 69, 70, 71, 72, 73, 74, 75};
+static const char *const LAB_SP_A[8] = {"C3", "C#3", "D3", "D#3", "E3", "F3", "F#3", "G3"};
+static const char *const LAB_SP_B[8] = {"G#3", "A3", "A#3", "B3", "C4", "C#4", "D4", "D#4"};
+static const uint8_t MAP_VS_A[8] = {36, 38, 39, 41, 43, 44, 42, 46};
+static const uint8_t MAP_VS_B[8] = {49, 50, 37, 40, 51, 45, 47, 48};
+static const char *const LAB_VS_A[8] = {"KICK", "SNARE", "CLAP", "LTOM", "MTOM", "HTOM", "CLHH", "OPHH"};
+static const char *const LAB_VS_B[8] = {"RIDE", "COWB", "RIM", "KICK2", "SNR2", "KICK3", "KICK4", "KICK5"};
+static const uint8_t MAP_V8_A[8] = {36, 37, 38, 39, 40, 41, 42, 43};
+static const uint8_t MAP_V8_B[8] = {44, 45, 46, 47, 48, 49, 50, 51};
+static const char *const LAB_V8_A[8] = {"KICK", "RIM", "SNARE", "CLAP", "CLHH", "OPHH", "LTOM", "MTOM"};
+static const char *const LAB_V8_B[8] = {"HTOM", "CYM", "COWB", "LCONG", "MCONG", "HCONG", "MAR", "CLAV"};
+static const uint8_t MAP_V9_A[8] = {52, 53, 54, 55, 56, 57, 58, 59};
+static const uint8_t MAP_V9_B[8] = {60, 61, 62, 0, 0, 0, 0, 0};
+static const char *const LAB_V9_A[8] = {"KICK2", "RIM2", "SNR2", "CLP2", "CLHH2", "OPHH2", "LTOM2", "MTOM2"};
+static const char *const LAB_V9_B[8] = {"HTOM2", "CRASH", "RIDE", LNONE, LNONE, LNONE, LNONE, LNONE};
+static const uint8_t MAP_VT_A[8] = {24, 27, 30, 33, 36, 39, 42, 45};
 typedef struct {
     const char *name, *msg, *hint;
     uint8_t ch;
@@ -184,7 +288,42 @@ static const MapDef MAPS[] = {
     {"TR08", "MAP TR08", " TR-08 NOTES", 1, MAP_08_A, MAP_08_B, LAB_08_A, LAB_08_B},
     {"VOLCA", "MAP VOLCA", " VOLCA LEVEL CC 40-49", 1, MAP_VB_A, MAP_VB_B, LAB_VB_A, LAB_VB_B},
     {"HAMR", "MAP HAMR", " HAMMERHEAD NOTES", 1, MAP_HH, 0, LAB_HH, 0},
+    {"AR909", "MAP AR909", " AR-909 APP", 1, MAP_AR_A, MAP_AR_B, LAB_AR_A, LAB_AR_B},
+    {"AXON2", "MAP AXON2", " AXON 2 PADS", 1, MAP_AX_A, 0, LAB_AX_A, 0},
+    {"BLIP", "MAP BLIP", " BLIP BOX APP", 1, MAP_BL_A, MAP_BL_B, LAB_BL_A, LAB_BL_B},
+    {"DADA", "MAP DADA", " DADAMACHINES PADS", 1, N36A, MAP_DA_B, PAD_A, LAB_DA_B},
+    {"DIGI", "MAP DIGI", " DIGISTIX APP", 1, N48A, N48B, LAB_DI_A, LAB_DI_B},
+    {"DM1", "MAP DM1", " DM1 DRUMLAB APP", 1, MAP_DM_A, MAP_DM_B, LAB_DM_A, LAB_DM_B},
+    {"DRUMC", "MAP DRUMC", " DRUMCOMPUTER APP", 1, MAP_DC_A, 0, PAD_A, 0},
+    {"E606", "MAP E606", " EGDR 606 APP", 1, MAP_606_A, 0, LAB_606_A, 0},
+    {"E808", "MAP E808", " EGDR 808 APP", 1, MAP_808_A, MAP_808_B, LAB_808_A, LAB_808_B},
+    {"E909", "MAP E909", " EGDR 909 APP", 1, MAP_E909_A, 0, LAB_E909_A, 0},
+    {"FAC", "MAP FAC", " FAC DRUMKIT PADS", 1, N36A, N36B, PAD_A, PAD_B},
+    {"GM8", "MAP GM8", " GENERAL MIDI 8", 10, MAP_G8_A, 0, LAB_G8_A, 0},
+    {"GM16", "MAP GM16", " GENERAL MIDI 16", 10, MAP_BL_A, MAP_BL_B, LAB_BL_A, LAB_BL_B},
+    {"HAMR2", "MAP HAMR2", " HAMMERHEAD APP ORDER", 1, MAP_H2_A, 0, LAB_H2_A, 0},
+    {"KO2X8", "MAP KO2X8", " KOALA SAMPLER 2X8", 1, MAP_K28_A, MAP_K28_B, PAD_A, PAD_B},
+    {"KO4X4", "MAP KO4X4", " KOALA SAMPLER 4X4", 1, MAP_K44_A, MAP_K44_B, PAD_A, PAD_B},
+    {"AMS", "MAP AMS", " KORG GADGET AMSTERDAM", 1, MAP_AMS_A, 0, LAB_AMS_A, 0},
+    {"BILBAO", "MAP BILBAO", " KORG GADGET BILBAO", 1, N36A, N36B, PAD_A, PAD_B},
+    {"GLAD", "MAP GLAD", " KORG GADGET GLADSTONE", 1, MAP_GL_A, MAP_GL_B, LAB_GL_A, LAB_GL_B},
+    {"LONDON", "MAP LONDON", " KORG GADGET LONDON", 1, N36A, 0, PAD_A, 0},
+    {"RECIFE", "MAP RECIFE", " KORG GADGET RECIFE", 1, N36A, N36B, PAD_A, PAD_B},
+    {"TOKYO", "MAP TOKYO", " KORG GADGET TOKYO", 1, MAP_TK_A, 0, LAB_TK_A, 0},
+    {"MV08", "MAP MV08", " MV08 APP", 1, MAP_MV_A, MAP_MV_B, LAB_MV_A, LAB_MV_B},
+    {"NS2", "MAP NS2", " NS2 SLATE APP", 1, N48A, N48B, LAB_NS_A, LAB_NS_B},
+    {"ACID", "MAP ACID", " PURE ACID DRUMS", 1, MAP_AC_A, MAP_AC_B, LAB_AC_A, LAB_AC_B},
+    {"RUIS", "MAP RUIS", " RUISMAKER APP", 1, MAP_RU_A, 0, LAB_RU_A, 0},
+    {"RUFM", "MAP RUFM", " RUISMAKER FM APP", 1, MAP_RF_A, 0, LAB_RF_A, 0},
+    {"SDSX", "MAP SDSX", " SDS-X APP", 1, MAP_SX_A, MAP_SX_B, LAB_SX_A, LAB_SX_B},
+    {"SITALA", "MAP SITALA", " SITALA CHROMATIC", 1, N36A, N36B, LAB_SI_A, LAB_SI_B},
+    {"SPLAT", "MAP SPLAT", " SPLAT-TO-CLAT C3 TO D#4", 1, MAP_SP_A, MAP_SP_B, LAB_SP_A, LAB_SP_B},
+    {"VASM", "MAP VASM", " VA DRUM SM APP", 1, MAP_VS_A, MAP_VS_B, LAB_VS_A, LAB_VS_B},
+    {"VA808", "MAP VA808", " VA DRUM 2 808", 1, MAP_V8_A, MAP_V8_B, LAB_V8_A, LAB_V8_B},
+    {"VA909", "MAP VA909", " VA DRUM 2 909", 1, MAP_V9_A, MAP_V9_B, LAB_V9_A, LAB_V9_B},
+    {"VATA", "MAP VATA", " VATANATOR PADS", 1, MAP_VT_A, 0, PAD_A, 0},
 };
+#undef LNONE
 #define NMAP ((uint32_t)(sizeof MAPS / sizeof MAPS[0]))
 static int prefix(const char *s, const char *p) {
     if (!s) return 0;
@@ -193,15 +332,25 @@ static int prefix(const char *s, const char *p) {
     }
     return 1;
 }
-/* KICK and BD are the kick voice. Hats, cymbals, and rides share the hat.
- * Toms, including HT2, and the congas share the tom. HT2 starts with H then T;
- * HAT starts with H then A, so it stays a hat. Everything else is the snare. */
+static int contains(const char *s, const char *p) {
+    if (!s || !p || !*p) return 0;
+    for (; *s; s++) if (prefix(s, p)) return 1;
+    return 0;
+}
+/* KICK, BD, and BASS are the kick. Hats, open and closed hats, cymbals,
+ * crashes, and rides share the hat. A name containing HH is a hat, so
+ * CLHH and HHCL are hats. Toms, including HT2, and the congas share the
+ * tom. HT2 starts with HT. HAT starts with HA, so it stays a hat. HTOM
+ * does not contain HH. A ---- lane is unused. Everything else is the snare. */
 static uint8_t model_of(const char *s) {
-    if (prefix(s, "KICK") || prefix(s, "BD")) return 0;
-    if (prefix(s, "HAT") || prefix(s, "OHAT") || prefix(s, "CYM") || prefix(s, "CRASH") || prefix(s, "RIDE")) return 2;
-    if (prefix(s, "TOM") || prefix(s, "LTOM") || prefix(s, "MTOM") || prefix(s, "HTOM")
-        || prefix(s, "HT") || prefix(s, "LT") || prefix(s, "MT")
-        || prefix(s, "HCG") || prefix(s, "MCG") || prefix(s, "LCG")) return 3;
+    if (!s || s[0] == '-') return 1;
+    if (prefix(s, "KICK") || prefix(s, "BD") || prefix(s, "BASS")) return 0;
+    if (prefix(s, "HAT") || prefix(s, "OH") || prefix(s, "CH")
+        || prefix(s, "CY") || prefix(s, "CR") || prefix(s, "RID")
+        || prefix(s, "HIH") || contains(s, "HH")) return 2;
+    if (prefix(s, "TOM") || prefix(s, "LT") || prefix(s, "MT") || prefix(s, "HT")
+        || prefix(s, "LC") || prefix(s, "MC") || prefix(s, "HC")
+        || contains(s, "CONG")) return 3;
     return 1;
 }
 static const MapDef *map_of(uint32_t ix) { return &MAPS[ix < NMAP ? ix : 0u]; }
@@ -454,7 +603,8 @@ static void render_step(void) {
             if (!v) continue;
             if (v > 127u) v = 127u;
             note = set.kit[ki].note[lane];
-            if (!note || note > 127u) note = 36u;
+            if (!note) continue;
+            if (note > 127u) note = 36u;
             if (n < 16u) {
                 seq_ev[n].note = (uint8_t)note;
                 seq_ev[n].vel = v;
@@ -874,14 +1024,14 @@ static void fill_rows(void) {
         ch_text(n3, set.kit[tr].ch);
         row_set(0, "K1", "MAP", k->name, (int)(set.kit[tr].map < NMAP ? set.kit[tr].map : 0u), 0, (int)NMAP - 1);
         row_set(1, "K2", "PAGE", set.kit[tr].bank ? "2" : "1", (int)set.kit[tr].bank, 0, k->b ? 1 : 0);
-        row_set(2, "K3", lane_name(tr, lane), n2, (int)note, 1, 127);
+        row_set(2, "K3", lane_name(tr, lane), n2, (int)note, 0, 127);
         row_set(3, "K4", "CHANNEL", n3, (int)set.kit[tr].ch, 1, 16);
     } else if (page == PG_EDIT && edit_alt) {
         uint32_t i, base = lane_now() & 4u;
         for (i = 0; i < 4u; i++) {
             char k[3] = {'K', (char)('1' + i), 0};
             note_text(n0, set.kit[tr].note[base + i]);
-            row_set(i, k, lane_name(tr, base + i), n0, (int)set.kit[tr].note[base + i], 1, 127);
+            row_set(i, k, lane_name(tr, base + i), n0, (int)set.kit[tr].note[base + i], 0, 127);
         }
     } else if (page == PG_EDIT) {
         static const char *NM[4] = {"TUNE", "DECAY", "SNAP", "DROP"};
@@ -1293,8 +1443,10 @@ static int find_lane(uint32_t midi_ch, uint32_t note, uint32_t *ki_out) {
     for (i = 0; i < n; i++) {
         k = order[i];
         if (kit_ch(k) != midi_ch) continue;
-        for (lane = 0; lane < NLANE; lane++)
-            if (set.kit[k].note[lane] == note) { *ki_out = k; return (int)lane; }
+        for (lane = 0; lane < NLANE; lane++) {
+            uint8_t played = set.kit[k].note[lane];
+            if (played && played == note) { *ki_out = k; return (int)lane; }
+        }
     }
     return -1;
 }
@@ -1304,7 +1456,8 @@ static void request_lane(uint32_t ki, uint32_t lane, uint32_t vel, int record) {
     if (ki >= NKIT || lane >= NLANE || !vel) return;
     if (vel > 127u) vel = 127u;
     note = set.kit[ki].note[lane];
-    if (!note || note > 127u) note = 36u;
+    if (!note) return;
+    if (note > 127u) note = 36u;
     model = set.kit[ki].model[lane];
     if (model > 3u) model = 1u;
     eng = set.kit[ki].engine;
@@ -1609,7 +1762,7 @@ static void clamp_set(void) {
         if (set.kit[i].level > 100u) set.kit[i].level = 100;
         map_labels(i);
         for (lane = 0; lane < NLANE; lane++) {
-            if (set.kit[i].note[lane] < 1u || set.kit[i].note[lane] > 127u) set.kit[i].note[lane] = 36;
+            if (set.kit[i].note[lane] > 127u) set.kit[i].note[lane] = 36;
             if (set.kit[i].lvl[lane] > 100u) set.kit[i].lvl[lane] = 100;
             if (set.kit[i].model[lane] > 3u) set.kit[i].model[lane] = model_of(lname[i][lane]);
             for (k = 0; k < 4u; k++) if (set.kit[i].parm[lane][k] > 100u) set.kit[i].parm[lane][k] = 40;
@@ -1833,11 +1986,11 @@ static void turn_page(uint32_t k, int e) {
                 message(set.kit[tr].bank ? "PAGE 2" : "PAGE 1");
             }
         } else if (k == 2u) {
-            set.kit[tr].note[lane_now()] = (uint8_t)clampu((int)set.kit[tr].note[lane_now()] + e, 1, 127);
+            set.kit[tr].note[lane_now()] = (uint8_t)clampu((int)set.kit[tr].note[lane_now()] + e, 0, 127);
         } else set.kit[tr].ch = (uint8_t)clampu((int)set.kit[tr].ch + e, 1, 16);
     } else if (page == PG_EDIT && edit_alt) {
         uint32_t ix = (lane_now() & 4u) + k;
-        set.kit[tr].note[ix] = (uint8_t)clampu((int)set.kit[tr].note[ix] + e, 1, 127);
+        set.kit[tr].note[ix] = (uint8_t)clampu((int)set.kit[tr].note[ix] + e, 0, 127);
     } else if (page == PG_EDIT) {
         set.kit[tr].parm[lane_now()][k] = (uint8_t)clampu((int)set.kit[tr].parm[lane_now()][k] + e, 0, 100);
     } else if (page == PG_ARP) {

@@ -1,0 +1,30 @@
+# Fmdac 0.7. K1 reaches the AUv3 app maps after the seven original charts.
+# GM8 is index 18: D# is lane 4, mid tom 47, channel 10.
+# HAMR2 is index 20: F# is lane 2, clap 39, the app row order.
+# RUIS is index 32: C is kick 49.
+# VA909 is index 39: page 2 lane 0 is note 60. Lane 3 is empty and sends nothing.
+40 btn 6
+80 btn 6
+120 btn 6
+160 enc 2 18
+220 shot
+260 keys 1024
+340 keys 0
+400 enc 2 2
+460 shot
+500 keys 2
+580 keys 0
+640 enc 2 12
+700 shot
+740 keys 128
+820 keys 0
+880 enc 2 7
+940 shot
+980 enc 3 1
+1040 shot
+1080 keys 128
+1160 keys 0
+1200 keys 2048
+1280 keys 0
+1360 shot
+1500 end

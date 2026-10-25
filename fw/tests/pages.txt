@@ -1,4 +1,4 @@
-# Fmdac 0.6: a track is a kit. SELECT stays inside T1..T4, a black key picks a lane, every kit plays, the song reaches SNG 2, HOME changes that kit's engine.
+# Fmdac 0.7 still treats a track as a kit. SELECT stays inside T1..T4, a black key picks a lane, every kit plays, the song reaches SNG 2, HOME changes that kit's engine.
 40 shot
 80 enc 0 4
 140 shot
