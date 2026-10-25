@@ -21,6 +21,8 @@ jobs:
       - name: Check the package catalog and the installer rules
         run: node --test docs/test.mjs
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs
