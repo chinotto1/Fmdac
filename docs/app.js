@@ -37,18 +37,17 @@ function reasonNow() {
     release: targetRelease(),
     prepared,
     device,
-    backupSaved: $("backup-saved").checked,
   });
 }
 
 function installLabel() {
-  if (prepared && device && !loaderMismatch(device.identity, prepared.product) && device.identity.startsWith("ota-")) {
-    return "Finish the update";
-  }
-  if (!prepared) return mode === "install" ? "Install Fmdac" : "Install";
-  if (mode === "install" && catalog.current.product && prepared.product === catalog.current.product) return "Install Fmdac";
-  if (mode === "recover") return `Install ${targetRelease()?.name || "firmware"}`;
-  return `Install ${prepared.product}`;
+  if (!prepared) return "Choose a firmware file";
+  if (!supported) return "Use Chrome or Edge";
+  if (!device) return "Connect the FM-1";
+  if (loaderMismatch(device.identity, prepared.product)) return "Choose the matching file";
+  if (device.identity.startsWith("ota-")) return "Finish the update";
+  if (mode === "install") return "Install Fmdac";
+  return `Install ${targetRelease()?.name || prepared.product}`;
 }
 
 function showDetails(name, product, hash) {
@@ -63,7 +62,7 @@ function render() {
   $("recovery-panel").hidden = mode !== "recover";
   $("mode-install").setAttribute("aria-pressed", String(mode === "install"));
   $("mode-recover").setAttribute("aria-pressed", String(mode === "recover"));
-  for (const id of ["mode-install", "mode-recover", "firmware", "backup-saved", "firmware-file"]) {
+  for (const id of ["mode-install", "mode-recover", "firmware", "firmware-file"]) {
     $(id).disabled = busy || !catalog;
   }
   $("connect").disabled = busy || !supported || !catalog;
@@ -178,7 +177,6 @@ for (const choice of ["install", "recover"]) {
 $("firmware").addEventListener("change", () => {
   if (!busy) clearPackage();
 });
-$("backup-saved").addEventListener("change", render);
 $("firmware-file").addEventListener("change", (event) => {
   const file = event.target.files?.[0];
   if (!busy && file) takeFile(file);

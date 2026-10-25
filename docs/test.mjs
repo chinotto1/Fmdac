@@ -32,7 +32,6 @@ const ready = {
   release: {enabled: false, filename: "fmdac.fwsc", reason: "unpublished"},
   prepared: null,
   device: null,
-  backupSaved: false,
 };
 
 test("package identity round-trips through the marker bytes", () => {
@@ -71,8 +70,12 @@ test("an unpinned file keeps the identity it actually carries", async () => {
   assert.equal(checked.release, null);
 });
 
-test("the install button stays closed until the file, the device, and the box line up", () => {
+test("the install button stays closed until a firmware file and the FM-1 are both ready", () => {
   assert.match(blockReason(ready), /Choose a \.fwsc/);
+  assert.match(blockReason({
+    ...ready,
+    device: {identity: "FM-1_015", name: "FM-1"},
+  }), /no Fmdac firmware file/);
   const prepared = {product: "FM-1_096"};
   assert.match(blockReason({...ready, prepared, supported: false}), /Chrome or Edge/);
   assert.match(blockReason({...ready, prepared}), /Connect the FM-1/);
@@ -80,14 +83,12 @@ test("the install button stays closed until the file, the device, and the box li
     ...ready,
     prepared,
     device: {identity: "ota-FM-1_713", name: "FM-1"},
-    backupSaved: true,
   }), /FM-1_713/);
   assert.equal(loaderMismatch("ota-FM-1_096", "FM-1_096"), false);
   assert.equal(blockReason({
     ...ready,
     prepared,
     device: {identity: "FM-1_015", name: "FM-1"},
-    backupSaved: true,
   }), "");
   assert.match(blockReason({
     ...ready,

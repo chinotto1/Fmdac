@@ -80,13 +80,16 @@ export function loaderMismatch(identity, product) {
   return Boolean(identity?.startsWith("ota-") && identity !== `ota-${product}`);
 }
 
-export function blockReason({catalogReady, supported, mode, release, prepared, device, backupSaved}) {
+export function blockReason({catalogReady, supported, mode, release, prepared, device}) {
   if (!catalogReady) return "Loading the firmware list…";
   if (mode === "recover") {
     if (!release) return "Choose a firmware.";
     if (release.enabled !== true) return release.reason || "This package is not available.";
   }
   if (!prepared) {
+    if (device && mode === "install") {
+      return "The FM-1 is connected. This page has no Fmdac firmware file yet. Choose a .fwsc and Install turns on.";
+    }
     return mode === "install"
       ? "Choose a .fwsc file. Its identity is read on this computer before anything is sent."
       : `Download ${release.filename} and choose it here. The page checks the published checksum.`;
@@ -96,6 +99,5 @@ export function blockReason({catalogReady, supported, mode, release, prepared, d
   if (loaderMismatch(device.identity, prepared.product)) {
     return `The FM-1 is finishing an update of ${device.identity.replace(/^ota-/, "")}. Choose that same package. This file is ${prepared.product}.`;
   }
-  if (!backupSaved) return "Tick the box once you can get back to the firmware on the FM-1 now.";
   return "";
 }
