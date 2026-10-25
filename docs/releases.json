@@ -2,14 +2,14 @@
   "current": {
     "id": "fmdac",
     "name": "Fmdac",
-    "version": "0.2",
+    "version": "0.3",
     "enabled": true,
-    "product": "FM-1_962",
+    "product": "FM-1_963",
     "size": 612188,
-    "sha256": "38549383ef596318774b0b5827772ab9b7e3e30be82d17d5baf0d110aa55e1d3",
+    "sha256": "74b2acf674ca7e7e422d002a884e1636cc5526d9e6a73b28029cf8988509dbab",
     "filename": "fmdac.fwsc",
     "source": "https://github.com/chinotto1/Fmdac",
-    "description": "Fmdac 0.2, identity FM-1_962. The screen is parameters: FX, HOME, SEQ, EDIT, ARP, LFO, ENV, GLO. K1–K4 change the values. PLAY starts a 16-step drum pattern. Keys play a tone and send MIDI. FX runs the mix through Prophet VS, DX7, SP-1200, Emulator II, or S950 on the way to the headphones. The computer records that same mix. Audio from the computer is not converted. No sample ROMs, no take recorder, no OCTACHRON map."
+    "description": "Fmdac 0.3, identity FM-1_963. The header names the track: KICK, SNARE, HAT, or TOM. SELECT, SEL, and K4 on SEQ change it. PLAY starts a 16-step pattern, and a drum stops after its decay instead of hissing on. FX runs the mix through Prophet VS, DX7, SP-1200, Emulator II, or S950 on the way to the headphones. The computer records that same mix. Audio from the computer is not converted. No sample ROMs, no take recorder, no OCTACHRON map."
   },
   "recovery": [
     {

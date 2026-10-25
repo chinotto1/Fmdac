@@ -1,17 +1,20 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Fmdac 0.2. Pages, synthesized drums, a 16-step pattern, and the converter.
+/* Fmdac 0.3. Pages, synthesized drums, a 16-step pattern, and the converter.
  *
- *   FX     machine, bits, rate, tone. SEL: wet, drive, bits, rate.
+ *   FX     machine, bits, rate, tone. Press FX again: wet, drive, bits, rate.
  *          The law is on the mix this FM-1 plays. Headphones hear that mix.
  *          USB audio records it. Audio from the computer is not an input.
  *   HOME   drum levels. Black keys F# G# A# C# hit the four drums.
- *   SEQ    white keys are the 16 steps. PLAY starts. REC writes the playhead.
- *   EDIT   tune, decay, snap, drop. Any key hits the selected drum.
+ *   SEQ    white keys are the 16 steps. K4 is the track. PLAY starts.
+ *          REC writes the playhead.
+ *   EDIT   tune, decay, snap, drop of the track. Any key hits that drum.
  *   ARP    up, down, up-down, random. Held keys, MIDI out.
  *   LFO    MIDI CC, and level or tune on this mix when DEST says so.
  *   ENV    attack, decay, sustain, release of the key tone.
  *   GLO    tempo, swing, length, MIDI channel. OCT+ twice clears the pattern.
- *   PRESETS  pattern 1..8.  SELECT track.  ALGORITHM tempo.  OCT the keys.
+ *   The track is KICK, SNARE, HAT, or TOM. SELECT and SEL both change it,
+ *   on every page, and the header shows the name. PRESETS is the pattern.
+ *   ALGORITHM is the tempo. OCT shifts the keys.
  *
  * Not in this file: sample ROMs, MIDI-only tracks, an OCTACHRON map,
  * retrospective take, a piano roll, a song chain, host-to-device USB audio.
@@ -30,7 +33,7 @@ static void app_idle(void);
 #include "cast_tab.h"
 #include "cast_dac.c"
 
-#define SET_VER 2u
+#define SET_VER 3u
 #define KEY0 53u
 enum { PG_FX, PG_HOME, PG_SEQ, PG_EDIT, PG_ARP, PG_LFO, PG_ENV, PG_GLO, PG_N };
 
@@ -141,29 +144,29 @@ static void drum_hit(uint32_t d, uint32_t vel) {
     if (i > 10u) i = 10u;
     mul = TUNE_Q12[i];
     if (i < 10u && f) mul += (uint32_t)(TUNE_Q12[i + 1u] - mul) * f / 10u;
-    if (d == 2u) {
-        v->amp = 0;
-        v->namp = (int32_t)vel * 220;
-        if (v->namp > 32767) v->namp = 32767;
-        v->lp = 0;
-        v->click = 0;
-    } else {
-        base = (uint32_t)(((uint64_t)DRUM_F[d] * mul) >> 12);
-        end = base ? base : 1u;
-        v->target = end;
-        v->inc = end + (uint32_t)(((uint64_t)end * drop) >> 4);
-        v->ph = 0;
-        v->amp = (int32_t)vel * 150;
-        if (v->amp > 30000) v->amp = 30000;
-        v->click = 0;
-        v->namp = 0;
-        if (d == 1u) {
-            v->namp = (int32_t)vel * (int32_t)snap * 2;
-            if (v->namp > 32767) v->namp = 32767;
+        if (d == 2u) {
+            v->amp = 0;
+            v->namp = (int32_t)vel * 140;
+            if (v->namp > 20000) v->namp = 20000;
+            v->lp = 0;
+            v->click = 0;
         } else {
-            v->click = (uint16_t)(snap * 4u);
+            base = (uint32_t)(((uint64_t)DRUM_F[d] * mul) >> 12);
+            end = base ? base : 1u;
+            v->target = end;
+            v->inc = end + (uint32_t)(((uint64_t)end * drop) >> 4);
+            v->ph = 0;
+            v->amp = (int32_t)vel * 110;
+            if (v->amp > 20000) v->amp = 20000;
+            v->click = 0;
+            v->namp = 0;
+            if (d == 1u) {
+                v->namp = (int32_t)vel * (int32_t)snap;
+                if (v->namp > 18000) v->namp = 18000;
+            } else {
+                v->click = (uint16_t)(snap * 3u);
+            }
         }
-    }
     v->alive = 1;
 }
 
@@ -210,6 +213,18 @@ static void tones_release(void) {
 
 static uint8_t step_i, trig_seen[4];
 static uint32_t step_acc, clk_acc, epoch_seen, ext_seen, clk_len_hold;
+
+/* Always reaches zero. A bare "a -= a >> sh" freezes once a is below 2^sh,
+ * and a hit then hisses forever. */
+static int32_t fall(int32_t a, uint32_t sh) {
+    int32_t s;
+    if (a <= 0) return 0;
+    if (sh > 14u) sh = 14u;
+    s = a >> sh;
+    if (s < 1) s = 1;
+    a -= s;
+    return a < 20 ? 0 : a;
+}
 
 static uint32_t step_len(uint32_t idx, uint32_t tempo, uint32_t swing) {
     uint32_t eighth, longl, shortl;
@@ -261,7 +276,7 @@ static void app_audio(int32_t *out, uint32_t n) {
         tune[d] = set.drum[d][0];
         drop[d] = set.drum[d][3];
         if (dec > 100u) dec = 100u;
-        sh[d] = 9u + dec / 10u;
+        sh[d] = 6u + dec * 8u / 100u;
         if (trig_n[d] != trig_seen[d]) {
             trig_seen[d] = trig_n[d];
             drum_hit(d, trig_v[d]);
@@ -330,14 +345,16 @@ static void app_audio(int32_t *out, uint32_t n) {
                     if (amp >= v->peak) { amp = v->peak; v->stage = 2u; }
                 } else if (v->stage == 2u) {
                     if (amp > v->sus) {
-                        amp -= (amp - v->sus) >> ds;
+                        int32_t step = (amp - v->sus) >> ds;
+                        if (step < 1) step = 1;
+                        amp -= step;
                         if (amp < v->sus) amp = v->sus;
                     } else v->stage = 3u;
                 } else if (v->stage == 3u) {
                     amp = v->sus;
                 } else if (v->stage == 4u || !v->stage) {
-                    if (amp > 0) amp -= amp >> rs;
-                    if (amp < 24) { amp = 0; v->stage = 0; }
+                    amp = fall(amp, rs);
+                    if (!amp) v->stage = 0;
                 }
                 ph += step;
                 s = amp ? (sine(ph) * amp) >> 15 : 0;
@@ -355,7 +372,6 @@ static void app_audio(int32_t *out, uint32_t n) {
         any = 1;
         gs = (int32_t)gv[d];
         dsh = sh[d];
-        if (d == 2u && dsh > 3u) dsh -= 2u;
         cut = 1u + (tune[d] > 100u ? 0u : (100u - tune[d]) / 25u);
         if (cut < 1u) cut = 1u;
         if (cut > 6u) cut = 6u;
@@ -368,10 +384,7 @@ static void app_audio(int32_t *out, uint32_t n) {
                 hp = nz - v->lp;
                 mixed = hp + ((v->lp * (int32_t)drop[d]) >> 7);
                 s = (mixed * v->namp) >> 15;
-                if (v->namp > 0) {
-                    v->namp -= v->namp >> dsh;
-                    if (v->namp < 40) v->namp = 0;
-                }
+                v->namp = fall(v->namp, dsh);
             } else {
                 step = v->inc;
                 if (lt) {
@@ -384,17 +397,9 @@ static void app_audio(int32_t *out, uint32_t n) {
                 if (v->click) { s += noise() >> 2; v->click--; }
                 if (d == 1u) {
                     s += (noise() * v->namp) >> 15;
-                    if (v->namp > 0) {
-                        uint32_t nsh = dsh > 1u ? dsh - 1u : 1u;
-                        v->namp -= v->namp >> nsh;
-                        if (v->namp < 40) v->namp = 0;
-                    }
+                    v->namp = fall(v->namp, dsh > 1u ? dsh - 1u : 1u);
                 }
-                if (v->amp > 0) {
-                    uint32_t ash = (d == 1u && dsh > 2u) ? dsh - 2u : dsh;
-                    v->amp -= v->amp >> ash;
-                    if (v->amp < 30) v->amp = 0;
-                }
+                v->amp = fall(v->amp, dsh);
                 if (v->inc > v->target) {
                     uint32_t diff = v->inc - v->target, st = diff >> 10;
                     v->inc = st ? v->inc - st : v->target;
@@ -405,7 +410,10 @@ static void app_audio(int32_t *out, uint32_t n) {
         }
         if (!v->amp && !v->namp && !v->click) v->alive = 0;
     }
-    for (i = 0; i < n; i++) {
+    if (!any) {
+        cast_dac_reset(&live);
+        for (i = 0; i < n; i++) out[2u * i] = out[2u * i + 1u] = 0;
+    } else for (i = 0; i < n; i++) {
         int32_t x = out[2u * i], y, wet;
         x = sat(x);
         if (!fx_bypass && wq) {
@@ -623,7 +631,7 @@ static void fill_rows(void) {
 static uint8_t cursor;
 
 static void fill_seq(void) {
-    char n0[12], n1[12], n2[12], n3[12];
+    char n0[12], n1[12], n2[12];
     uint32_t len = set.length, vel = 0;
     if (len < 1u) len = 1u;
     if (len > 16u) len = 16u;
@@ -632,11 +640,10 @@ static void fill_seq(void) {
     num(n0, (uint32_t)cursor + 1u);
     num(n1, vel);
     num(n2, len);
-    num(n3, set.swing);
     row_set(0, "K1", "STEP", n0, (int)cursor, 0, (int)len - 1);
     row_set(1, "K2", "VELOCITY", n1, (int)vel, 0, 127);
     row_set(2, "K3", "LENGTH", n2, (int)len, 1, 16);
-    row_set(3, "K4", "SWING", n3, (int)set.swing, 50, 75);
+    row_set(3, "K4", "TRACK", TRK[set.track > 3u ? 0u : set.track], (int)set.track, 0, 3);
 }
 
 static void draw_big(uint32_t i, uint32_t y) {
@@ -684,47 +691,46 @@ static void draw_grid(void) {
     cv_blit(0, 16);
 }
 static void header_text(char *d) {
-    const char *name = "FX", *sub = "ON THIS MIX";
-    uint32_t n;
-    if (page == PG_FX && fx_alt) sub = "WET AND DRIVE";
-    else if (page == PG_HOME) { name = "HOME"; sub = "DRUM LEVELS"; }
-    else if (page == PG_SEQ) { name = "SEQ"; sub = TRK[set.track > 3u ? 0u : set.track]; }
-    else if (page == PG_EDIT) { name = "EDIT"; sub = TRK[set.track > 3u ? 0u : set.track]; }
-    else if (page == PG_ARP) { name = "ARP"; sub = "HELD KEYS"; }
-    else if (page == PG_LFO) { name = "LFO"; sub = "CC AND THE MIX"; }
-    else if (page == PG_ENV) { name = "ENV"; sub = "KEY TONE"; }
-    else if (page == PG_GLO) { name = "GLO"; sub = "TEMPO AND MIDI"; }
+    const char *name = "FX";
+    uint32_t n, tr = set.track > 3u ? 0u : set.track;
+    if (page == PG_FX && fx_alt) name = "WET";
+    else if (page == PG_HOME) name = "HOME";
+    else if (page == PG_SEQ) name = "SEQ";
+    else if (page == PG_EDIT) name = "EDIT";
+    else if (page == PG_ARP) name = "ARP";
+    else if (page == PG_LFO) name = "LFO";
+    else if (page == PG_ENV) name = "ENV";
+    else if (page == PG_GLO) name = "GLO";
     n = put_str(d, 40, 0, " ");
     n = put_str(d, 40, n, name);
-    n = put_str(d, 40, n, "  ");
-    n = put_str(d, 40, n, sub);
+    n = put_str(d, 40, n, "  TRACK ");
+    n = put_str(d, 40, n, TRK[tr]);
     n = put_str(d, 40, n, "  v");
     put_str(d, 40, n, APP_VER);
 }
 static void status_text(char *d) {
     uint32_t n, tr = set.track > 3u ? 0u : set.track;
-    n = put_str(d, 40, 0, seq_run ? " PLAY " : " ");
+    n = put_str(d, 40, 0, " ");
+    n = put_str(d, 40, n, TRK[tr]);
+    n = put_str(d, 40, n, seq_run ? " PLAY " : " ");
     n = put_u_at(d, 40, n, set.tempo);
-    n = put_str(d, 40, n, " BPM  PAT ");
+    n = put_str(d, 40, n, "  PAT ");
     n = put_u_at(d, 40, n, (uint32_t)set.pattern + 1u);
-    n = put_str(d, 40, n, "  ");
     if (seq_run) {
-        n = put_str(d, 40, n, "STEP ");
-        n = put_u_at(d, 40, n, (uint32_t)seq_pos + 1u);
-        n = put_str(d, 40, n, "  ");
+        n = put_str(d, 40, n, "  S");
+        put_u_at(d, 40, n, (uint32_t)seq_pos + 1u);
     }
-    put_str(d, 40, n, TRK[tr]);
 }
 static const char *hint_text(void) {
     if (msg_on()) return msg;
-    if (page == PG_FX && fx_alt) return " SEL = THE LAW";
-    if (page == PG_FX && set.machine == 4u) return " RATE SETS THE BAND";
-    if (page == PG_FX && set.machine == 5u) return " K1 PICKS A MACHINE";
-    if (page == PG_FX) return " PLAY STARTS DRUMS";
-    if (page == PG_HOME) return " BLACK KEYS HIT DRUMS";
-    if (page == PG_SEQ && rec) return " REC WRITES THE STEP";
-    if (page == PG_SEQ) return " WHITE KEYS SET STEPS";
-    if (page == PG_EDIT) return " KEYS HIT THIS DRUM";
+    if (page == PG_FX && fx_alt) return " PRESS FX FOR THE LAW";
+    if (page == PG_FX && set.machine == 4u) return " SELECT = TRACK";
+    if (page == PG_FX && set.machine == 5u) return " SELECT = TRACK";
+    if (page == PG_FX) return " SELECT = TRACK";
+    if (page == PG_HOME) return " SELECT = TRACK";
+    if (page == PG_SEQ && rec) return " REC WRITES THIS TRACK";
+    if (page == PG_SEQ) return " K4 OR SELECT = TRACK";
+    if (page == PG_EDIT) return " SELECT = THIS DRUM";
     if (page == PG_ARP) return " HOLD KEYS TO RUN IT";
     if (page == PG_LFO) return " DEPTH IS AUDIBLE";
     if (page == PG_ENV) return " THE KEYS USE THIS";
@@ -912,10 +918,10 @@ static void defaults(void) {
     }
     set.wet = 100;
     set.mix[0] = 100; set.mix[1] = 92; set.mix[2] = 64; set.mix[3] = 78;
-    set.drum[0][0] = 42; set.drum[0][1] = 64; set.drum[0][2] = 28; set.drum[0][3] = 78;
-    set.drum[1][0] = 58; set.drum[1][1] = 46; set.drum[1][2] = 72; set.drum[1][3] = 18;
-    set.drum[2][0] = 74; set.drum[2][1] = 22; set.drum[2][2] = 100; set.drum[2][3] = 12;
-    set.drum[3][0] = 48; set.drum[3][1] = 56; set.drum[3][2] = 20; set.drum[3][3] = 64;
+    set.drum[0][0] = 42; set.drum[0][1] = 100; set.drum[0][2] = 28; set.drum[0][3] = 78;
+    set.drum[1][0] = 58; set.drum[1][1] = 76; set.drum[1][2] = 55; set.drum[1][3] = 18;
+    set.drum[2][0] = 62; set.drum[2][1] = 42; set.drum[2][2] = 100; set.drum[2][3] = 18;
+    set.drum[3][0] = 48; set.drum[3][1] = 88; set.drum[3][2] = 20; set.drum[3][3] = 64;
     set.atk = 2; set.dec = 28; set.sus = 100; set.rel = 24;
     set.arp_div = 2; set.arp_gate = 55; set.arp_oct = 1;
     set.lfo_rate = 36; set.lfo_cc = 1; set.lfo_dest = 2;
@@ -1136,7 +1142,7 @@ static void turn_page(uint32_t k, int e) {
         if (k == 0u) cursor = (uint8_t)clampu((int)cursor + e, 0, (int)len - 1);
         else if (k == 1u) set.pat[set.pattern][set.track][cursor] = (uint8_t)clampu((int)set.pat[set.pattern][set.track][cursor] + e, 0, 127);
         else if (k == 2u) set.length = (uint8_t)clampu((int)set.length + e, 1, 16);
-        else set.swing = (uint8_t)clampu((int)set.swing + e, 50, 75);
+        else set.track = (uint8_t)clampu((int)set.track + e, 0, 3);
     } else if (page == PG_EDIT) {
         uint32_t tr = set.track > 3u ? 0u : set.track;
         set.drum[tr][k] = (uint8_t)clampu((int)set.drum[tr][k] + e, 0, 100);
@@ -1298,10 +1304,11 @@ static void app_main(void) {
 
         b = fm1_input_edges(&rel);
         pg = page_of(b);
-        if (pg < PG_N) go(pg);
+        if (pg == PG_FX && page == PG_FX) { fx_alt ^= 1u; paint_req = 1; }
+        else if (pg < PG_N) go(pg);
         if (b & (1u << BTN_SEL)) {
-            if (page == PG_FX) { fx_alt ^= 1u; paint_req = 1; }
-            else { set.track = (uint8_t)((set.track + 1u) & 3u); paint_req = 1; }
+            set.track = (uint8_t)((set.track + 1u) & 3u);
+            paint_req = 1;
         }
         if (b & (1u << BTN_PLAY)) transport(!seq_run, 1);
         if (b & (1u << BTN_REC)) { rec ^= 1u; paint_req = 1; }
