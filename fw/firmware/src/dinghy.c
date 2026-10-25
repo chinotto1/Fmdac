@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Fmdac 0.4. Drums, MIDI tracks, a sequencer, and the converter.
+/* Fmdac 0.5. Drums, MIDI tracks, a sequencer, and the converter.
  *
  *   FX     machine, bits, rate, tone. Press FX again: wet, drive, bits, rate.
  *          The law is on the headphones. While a computer streams USB audio,
@@ -13,9 +13,12 @@
  *   PIANO  keys write the selected MIDI track and move the cursor.
  *   SONG   16 slots. K1 picks the slot, K2 the pattern, K3 the length.
  *          PLAY walks the chain when the length is more than one.
- *   EDIT   tune, decay, snap, drop of a drum. Press EDIT again: the GM note
- *          of each drum, or the channel of each MIDI track. There is no
- *          OCTACHRON map in this file.
+ *   EDIT   tune, decay, snap, drop of a drum. Press EDIT again: the note
+ *          of each drum, or the channel of each MIDI track. Press EDIT
+ *          again: a kit map. The notes are the published maps of the
+ *          instruments OCTACHRON maps to (GM, TR-909, TR-707, TR-727,
+ *          TR-08, Volca Beats) and the Hammerhead list its author posted.
+ *          This is not every preset stored inside the OCTACHRON app.
  *   ARP    up, down, up-down, random, chord, and as-played. Press ARP again
  *          to latch the held keys.
  *   LFO    MIDI CC, and level or tune on this mix when DEST says so.
@@ -47,7 +50,7 @@ static int uac_play_on(void) { return 0; }
 static int uac_play_frame(int32_t *l, int32_t *r) { *l = 0; *r = 0; return 0; }
 #endif
 
-#define SET_VER 4u
+#define SET_VER 5u
 enum { PG_FX, PG_HOME, PG_SEQ, PG_EDIT, PG_ARP, PG_LFO, PG_ENV, PG_GLO, PG_N };
 enum { VW_GRID, VW_PIANO, VW_SONG };
 
@@ -66,6 +69,7 @@ typedef struct {
     uint8_t gm[4];
     uint8_t mnote[4];
     uint8_t mch[4];
+    uint8_t map, bank, dch;         /* kit map, its page, MIDI channel 1..16 */
     uint8_t song[16];
     uint8_t song_len;
     uint8_t pat[8][8][16];          /* drum velocity, or MIDI note (0 = rest) */
@@ -104,6 +108,7 @@ static const uint8_t BITV[5] = {8, 10, 12, 14, 16};
 static const char *const MACH[6] = {"VS", "DX7", "SP-1200", "EMU II", "S950", "OFF"};
 static const char *const TNAM[5] = {"RAW", "DARK", "OPEN", "BRIGHT", "FULL"};
 static const char *const TRK[8] = {"KICK", "SNARE", "HAT", "TOM", "M1", "M2", "M3", "M4"};
+static const char *vlab[8];
 static const char *const ENG[4] = {"808", "909", "CR78", "SDS"};
 static const char *const ENGMSG[4] = {"ENGINE 808", "ENGINE 909", "ENGINE CR78", "ENGINE SDS"};
 static const char *const ENGNXT[4] = {
@@ -112,6 +117,88 @@ static const char *const MODE[7] = {"OFF", "UP", "DOWN", "UP-DN", "RAND", "CHORD
 static const char *const DIVN[4] = {"1/4", "1/8", "1/16", "1/32"};
 static const char *const DEST[3] = {"OFF", "TUNE", "LEVEL"};
 static const char *const NTN[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+
+/* Published drum-note maps. One page is eight notes: the four sounding
+ * drums, then four silent MIDI rows. A second page is eight more notes
+ * from the same chart. Channels are the chart's default where it names
+ * one, and 1 where the chart leaves the channel to the instrument.
+ *
+ * GM: MMA General MIDI percussion.
+ * 909: Roland TR-909 service notes, June 1984, key assignment. Each voice
+ *   answers two note numbers; the first page sends one, the second page
+ *   sends the other and the remaining voices.
+ * 707 and 727: the same 35-51 assignment, which the TR-707 and TR-727
+ *   manuals use. Their extra percussion notes are not split out here.
+ * TR-08: Roland TR-08 MIDI implementation chart, August 2017, the notes
+ *   the instrument sends. The original TR-808 has no MIDI.
+ * Volca Beats: Korg MIDI implementation, notes 36, 38, 39, 42, 43, 46,
+ *   49, 50, 67, and 75. Part level is CC 40 through 49.
+ * Hammerhead: the eight notes Markus Teufel posted for OCTACHRON. */
+static const uint8_t MAP_GM_A[8] = {36, 38, 42, 45, 39, 46, 37, 49};
+static const uint8_t MAP_GM_B[8] = {41, 47, 48, 50, 51, 56, 54, 75};
+static const uint8_t MAP_909_A[8] = {36, 38, 42, 41, 39, 46, 37, 49};
+static const uint8_t MAP_909_B[8] = {45, 48, 51, 35, 40, 43, 47, 50};
+static const uint8_t MAP_08_A[8] = {36, 38, 42, 43, 39, 46, 37, 49};
+static const uint8_t MAP_08_B[8] = {47, 50, 56, 62, 63, 64, 70, 75};
+static const uint8_t MAP_VB_A[8] = {36, 38, 42, 43, 39, 46, 50, 49};
+static const uint8_t MAP_VB_B[8] = {36, 38, 42, 50, 39, 46, 67, 75};
+static const uint8_t MAP_HH[8] = {36, 38, 42, 45, 39, 46, 48, 50};
+static const char *const LAB_GM_A[8] = {"KICK", "SNARE", "HAT", "TOM", "CLAP", "OHAT", "RIM", "CRASH"};
+static const char *const LAB_GM_B[8] = {"LTOM", "MTOM", "HTOM", "HT2", "RIDE", "COWB", "TAMB", "CLAV"};
+static const char *const LAB_909_A[8] = {"KICK", "SNARE", "HAT", "LTOM", "CLAP", "OHAT", "RIM", "CRASH"};
+static const char *const LAB_909_B[8] = {"MTOM", "HTOM", "RIDE", "BD2", "SD2", "LT2", "MT2", "HT2"};
+static const char *const LAB_08_A[8] = {"KICK", "SNARE", "HAT", "LTOM", "CLAP", "OHAT", "RIM", "CYM"};
+static const char *const LAB_08_B[8] = {"MTOM", "HTOM", "COWB", "HCG", "MCG", "LCG", "MAR", "CLAV"};
+static const char *const LAB_VB_A[8] = {"KICK", "SNARE", "HAT", "LTOM", "CLAP", "OHAT", "HTOM", "CRASH"};
+static const char *const LAB_VB_B[8] = {"KICK", "SNARE", "HAT", "HTOM", "CLAP", "OHAT", "AGOG", "CLAV"};
+static const char *const LAB_HH[8] = {"KICK", "SNARE", "HAT", "RIM", "CLAP", "OHAT", "SNR2", "BELL"};
+typedef struct {
+    const char *name, *msg, *hint;
+    uint8_t ch;
+    const uint8_t *a;
+    const uint8_t *b;
+    const char *const *la;
+    const char *const *lb;
+} Kit;
+static const Kit KITS[] = {
+    {"GM", "MAP GM", " GM DRUM NOTES", 10, MAP_GM_A, MAP_GM_B, LAB_GM_A, LAB_GM_B},
+    {"909", "MAP 909", " TR-909 NOTES", 10, MAP_909_A, MAP_909_B, LAB_909_A, LAB_909_B},
+    {"707", "MAP 707", " TR-707 NOTES 35-51", 10, MAP_909_A, MAP_909_B, LAB_909_A, LAB_909_B},
+    {"727", "MAP 727", " TR-727 NOTES 35-51", 10, MAP_909_A, MAP_909_B, LAB_909_A, LAB_909_B},
+    {"TR08", "MAP TR08", " TR-08 NOTES", 1, MAP_08_A, MAP_08_B, LAB_08_A, LAB_08_B},
+    {"VOLCA", "MAP VOLCA", " VOLCA LEVEL CC 40-49", 1, MAP_VB_A, MAP_VB_B, LAB_VB_A, LAB_VB_B},
+    {"HAMR", "MAP HAMR", " HAMMERHEAD NOTES", 1, MAP_HH, 0, LAB_HH, 0},
+};
+#define NMAP ((uint32_t)(sizeof KITS / sizeof KITS[0]))
+static uint32_t map_ix(void) { return set.map < NMAP ? set.map : 0u; }
+static const Kit *kit_now(void) { return &KITS[map_ix()]; }
+static const char *trk_name(uint32_t tr) {
+    if (tr > 7u) tr = 0;
+    if (vlab[tr]) return vlab[tr];
+    return TRK[tr];
+}
+static void map_labels(void) {
+    const Kit *k = kit_now();
+    const char *const *labs;
+    uint32_t i;
+    if (set.bank && !k->b) set.bank = 0;
+    labs = set.bank ? k->lb : k->la;
+    for (i = 0; i < 8u; i++) vlab[i] = labs[i];
+}
+static void apply_map(void) {
+    const Kit *k = kit_now();
+    const uint8_t *notes;
+    uint32_t i;
+    if (set.bank && !k->b) set.bank = 0;
+    notes = set.bank ? k->b : k->a;
+    set.dch = k->ch;
+    for (i = 0; i < 4u; i++) {
+        set.gm[i] = notes[i];
+        set.mnote[i] = notes[4u + i];
+        set.mch[i] = k->ch;
+    }
+    map_labels();
+}
 
 static uint32_t clampu(int v, int lo, int hi) {
     if (v < lo) return (uint32_t)lo;
@@ -703,16 +790,25 @@ static void fill_rows(void) {
             num(n0, set.mix[i]);
             row_set(i, k, TRK[i], n0, (int)set.mix[i], 0, 100);
         }
+    } else if (page == PG_EDIT && edit_alt == 2u) {
+        const Kit *k = kit_now();
+        uint32_t note = tr < 4u ? set.gm[tr] : set.mnote[tr - 4u];
+        note_text(n2, note);
+        ch_text(n3, set.dch);
+        row_set(0, "K1", "MAP", k->name, (int)map_ix(), 0, (int)NMAP - 1);
+        row_set(1, "K2", "PAGE", set.bank ? "2" : "1", (int)set.bank, 0, k->b ? 1 : 0);
+        row_set(2, "K3", trk_name(tr), n2, (int)note, 1, 127);
+        row_set(3, "K4", "CHANNEL", n3, (int)set.dch, 1, 16);
     } else if (page == PG_EDIT && edit_alt) {
         uint32_t i;
         for (i = 0; i < 4u; i++) {
             char k[3] = {'K', (char)('1' + i), 0};
             if (tr >= 4u) {
                 ch_text(n0, set.mch[i]);
-                row_set(i, k, TRK[4u + i], n0, (int)set.mch[i], 1, 16);
+                row_set(i, k, trk_name(4u + i), n0, (int)set.mch[i], 1, 16);
             } else {
                 note_text(n0, set.gm[i]);
-                row_set(i, k, TRK[i], n0, (int)set.gm[i], 0, 127);
+                row_set(i, k, trk_name(i), n0, (int)set.gm[i], 0, 127);
             }
         }
     } else if (page == PG_EDIT && tr >= 4u) {
@@ -801,7 +897,7 @@ static void fill_seq(void) {
         row_set(0, "K1", "SLOT", n0, (int)slot, 0, (int)sl - 1);
         row_set(1, "K2", "PATTERN", n1, (int)patn, 0, 7);
         row_set(2, "K3", "LENGTH", n2, (int)sl, 1, 16);
-        row_set(3, "K4", "TRACK", TRK[tr], (int)tr, 0, 7);
+        row_set(3, "K4", "TRACK", trk_name(tr), (int)tr, 0, 7);
         return;
     }
     if (tr >= 4u) {
@@ -814,7 +910,7 @@ static void fill_seq(void) {
             num(n2, set.pvel[set.pattern][tr - 4u][cursor]);
             row_set(2, "K3", "VELOCITY", n2, (int)set.pvel[set.pattern][tr - 4u][cursor], 1, 127);
         } else row_set(2, "K3", "LENGTH", n2, (int)len, 1, 16);
-        row_set(3, "K4", "TRACK", TRK[tr], (int)tr, 0, 7);
+        row_set(3, "K4", "TRACK", trk_name(tr), (int)tr, 0, 7);
         return;
     }
     vel = set.pat[set.pattern][tr][cursor];
@@ -824,7 +920,7 @@ static void fill_seq(void) {
     row_set(0, "K1", "STEP", n0, (int)cursor, 0, (int)len - 1);
     row_set(1, "K2", "VELOCITY", n1, (int)vel, 0, 127);
     row_set(2, "K3", "LENGTH", n2, (int)len, 1, 16);
-    row_set(3, "K4", "TRACK", TRK[tr], (int)tr, 0, 7);
+    row_set(3, "K4", "TRACK", trk_name(tr), (int)tr, 0, 7);
 }
 
 static void draw_big(uint32_t i, uint32_t y) {
@@ -905,6 +1001,7 @@ static void header_text(char *d) {
     else if (page == PG_SEQ && seq_view == VW_PIANO) name = "PIANO";
     else if (page == PG_SEQ && seq_view == VW_SONG) name = "SONG";
     else if (page == PG_SEQ) name = "GRID";
+    else if (page == PG_EDIT && edit_alt == 2u) name = "MAP";
     else if (page == PG_EDIT && edit_alt) name = "NOTE";
     else if (page == PG_EDIT) name = "EDIT";
     else if (page == PG_ARP) name = "ARP";
@@ -917,16 +1014,19 @@ static void header_text(char *d) {
     if (page == PG_HOME) {
         n = put_str(d, 40, n, " ");
         n = put_str(d, 40, n, ENG[engi()]);
+    } else if (page == PG_EDIT && edit_alt == 2u) {
+        n = put_str(d, 40, n, " ");
+        n = put_str(d, 40, n, kit_now()->name);
     }
     n = put_str(d, 40, n, "  ");
-    n = put_str(d, 40, n, TRK[tr]);
+    n = put_str(d, 40, n, trk_name(tr));
     n = put_str(d, 40, n, "  v");
     put_str(d, 40, n, APP_VER);
 }
 static void status_text(char *d) {
     uint32_t n, tr = trk();
     n = put_str(d, 40, 0, " ");
-    n = put_str(d, 40, n, TRK[tr]);
+    n = put_str(d, 40, n, trk_name(tr));
     n = put_str(d, 40, n, seq_run ? " PLAY " : " ");
     n = put_u_at(d, 40, n, set.tempo);
     if (seq_run && set.song_len > 1u) {
@@ -951,8 +1051,8 @@ static const char *hint_text(void) {
     if (page == PG_SEQ && seq_view == VW_PIANO) return " KEYS WRITE A STEP";
     if (page == PG_SEQ && seq_view == VW_SONG) return " PLAY WALKS THE CHAIN";
     if (page == PG_SEQ) return " K4 OR SELECT = TRACK";
-    if (page == PG_EDIT && edit_alt && trk() >= 4u) return " MIDI CHANNEL";
-    if (page == PG_EDIT && edit_alt) return " GM NOTE OF EACH DRUM";
+    if (page == PG_EDIT && edit_alt == 2u) return kit_now()->hint;
+    if (page == PG_EDIT && edit_alt) return " PRESS EDIT FOR THE MAP";
     if (page == PG_EDIT) return " PRESS EDIT FOR NOTES";
     if (page == PG_ARP && set.arp_latch) return " LATCH HOLDS THE KEYS";
     if (page == PG_ARP) return " PRESS ARP TO LATCH";
@@ -1039,6 +1139,11 @@ static uint32_t midi_ch(uint32_t tr) {
     if (tr >= 4u) tr = 0;
     ch = set.mch[tr];
     if (ch < 1u || ch > 16u) ch = 1u;
+    return ch - 1u;
+}
+static uint32_t drum_ch(void) {
+    uint32_t ch = set.dch;
+    if (ch < 1u || ch > 16u) ch = 10u;
     return ch - 1u;
 }
 
@@ -1151,8 +1256,8 @@ static void request_drum(uint32_t d, uint32_t vel, int record) {
     if (vel > 127u) vel = 127u;
     trig_v[d] = (uint8_t)vel;
     trig_n[d]++;
-    midi_out(0x99u, set.gm[d], vel);
-    note_off_later(9u, set.gm[d], 70u);
+    midi_out(0x90u | drum_ch(), set.gm[d], vel);
+    note_off_later(drum_ch(), set.gm[d], 70u);
     take_push(128u + d, vel);
     menv_trig(0);
     if (record && rec && seq_run) {
@@ -1360,8 +1465,6 @@ static void defaults(void) {
     static const uint8_t K0[16] = {120, 0, 0, 0, 100, 0, 0, 0, 120, 0, 0, 0, 100, 0, 0, 0};
     static const uint8_t S0[16] = {0, 0, 0, 0, 110, 0, 0, 0, 0, 0, 0, 0, 110, 0, 40, 0};
     static const uint8_t H0[16] = {80, 0, 48, 0, 80, 0, 48, 0, 80, 0, 48, 0, 80, 0, 48, 0};
-    static const uint8_t GM0[4] = {36, 38, 42, 45};
-    static const uint8_t MN0[4] = {60, 64, 67, 72};
     uint32_t i, m;
     set_zero();
     set.ver = SET_VER;
@@ -1389,7 +1492,9 @@ static void defaults(void) {
     set.arp_div = 2; set.arp_gate = 55; set.arp_oct = 1;
     set.lfo_rate = 36; set.lfo_cc = 1; set.lfo_dest = 2;
     set.env_cc = 11; set.env_amt = 100;
-    for (i = 0; i < 4u; i++) { set.gm[i] = GM0[i]; set.mnote[i] = MN0[i]; set.mch[i] = 1; }
+    set.map = 0;
+    set.bank = 0;
+    apply_map();
     for (i = 0; i < 16u; i++) {
         pat_put(0, 0, i, K0[i]); pat_put(0, 1, i, S0[i]); pat_put(0, 2, i, H0[i]);
         if ((i & 3u) == 0u) { pat_put(1, 0, i, 110); pat_put(1, 2, i, 90); }
@@ -1450,6 +1555,10 @@ static void clamp_set(void) {
     if (set.env_on > 1u) set.env_on = 0;
     if (set.env_cc < 1u || set.env_cc > 127u) set.env_cc = 11;
     if (set.env_amt > 100u) set.env_amt = 100;
+    if (set.map >= NMAP) set.map = 0;
+    if (set.bank > 1u) set.bank = 0;
+    if (set.dch < 1u || set.dch > 16u) set.dch = 10;
+    map_labels();
 }
 static void audio_params(void) {
     uint32_t i, w = set.wet;
@@ -1640,6 +1749,27 @@ static void turn_page(uint32_t k, int e) {
             set.pvel[set.pattern][tr - 4u][cursor] = (uint8_t)clampu((int)set.pvel[set.pattern][tr - 4u][cursor] + e, 1, 127);
         else if (k == 2u) set.length = (uint8_t)clampu((int)set.length + e, 1, 16);
         else set.track = (uint8_t)clampu((int)set.track + e, 0, 7);
+    } else if (page == PG_EDIT && edit_alt == 2u) {
+        if (k == 0u) {
+            set.map = (uint8_t)clampu((int)set.map + e, 0, (int)NMAP - 1);
+            set.bank = 0;
+            apply_map();
+            message(kit_now()->msg);
+        } else if (k == 1u) {
+            if (!kit_now()->b) message("ONE PAGE");
+            else {
+                set.bank = (uint8_t)clampu((int)set.bank + e, 0, 1);
+                apply_map();
+                message(set.bank ? "PAGE 2" : "PAGE 1");
+            }
+        } else if (k == 2u) {
+            if (tr < 4u) set.gm[tr] = (uint8_t)clampu((int)set.gm[tr] + e, 1, 127);
+            else set.mnote[tr - 4u] = (uint8_t)clampu((int)set.mnote[tr - 4u] + e, 1, 127);
+        } else {
+            uint32_t i;
+            set.dch = (uint8_t)clampu((int)set.dch + e, 1, 16);
+            for (i = 0; i < 4u; i++) set.mch[i] = set.dch;
+        }
     } else if (page == PG_EDIT && edit_alt) {
         if (tr >= 4u) set.mch[k] = (uint8_t)clampu((int)set.mch[k] + e, 1, 16);
         else set.gm[k] = (uint8_t)clampu((int)set.gm[k] + e, 0, 127);
@@ -1753,8 +1883,8 @@ static void app_main(void) {
             if (gate_ms > 400u) gate_ms = 400u;
             for (d = 0; d < 4u; d++) {
                 if (seq_vel_out[d]) {
-                    midi_out(0x99u, set.gm[d], seq_vel_out[d]);
-                    note_off_later(9u, set.gm[d], 60u);
+                    midi_out(0x90u | drum_ch(), set.gm[d], seq_vel_out[d]);
+                    note_off_later(drum_ch(), set.gm[d], 60u);
                     menv_trig(0);
                 }
                 if (seq_mnote[d]) {
@@ -1882,7 +2012,10 @@ static void app_main(void) {
         pg = page_of(b);
         if (pg == PG_FX && page == PG_FX) { fx_alt ^= 1u; paint_req = 1; }
         else if (pg == PG_ENV && page == PG_ENV) { env_alt ^= 1u; paint_req = 1; }
-        else if (pg == PG_EDIT && page == PG_EDIT) { edit_alt ^= 1u; paint_req = 1; }
+        else if (pg == PG_EDIT && page == PG_EDIT) {
+            edit_alt = (uint8_t)((edit_alt + 1u) % 3u);
+            paint_req = 1;
+        }
         else if (pg == PG_SEQ && page == PG_SEQ) {
             seq_view = (uint8_t)((seq_view + 1u) % 3u);
             paint_req = 1;

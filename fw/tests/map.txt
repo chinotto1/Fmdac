@@ -1,0 +1,26 @@
+# Fmdac 0.5: EDIT three times opens the kit map. K1 walks the published maps.
+40 btn 6
+80 btn 6
+120 btn 6
+160 shot
+200 enc 2 1
+240 shot
+280 enc 2 1
+320 shot
+360 enc 2 1
+400 shot
+440 enc 2 1
+480 shot
+520 enc 3 1
+560 shot
+600 keys 2
+680 keys 0
+760 enc 3 -1
+800 shot
+840 enc 2 1
+880 shot
+920 enc 2 1
+960 shot
+1000 enc 3 1
+1040 shot
+1200 end
