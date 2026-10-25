@@ -1,0 +1,23 @@
+# Fmdac 0.2: every page, one knob, then PLAY.
+50 shot
+200 btn 8
+280 shot
+400 btn 11
+500 shot
+620 btn 6
+700 shot
+820 btn 10
+900 shot
+1020 btn 5
+1100 shot
+1220 btn 4
+1300 shot
+1420 btn 7
+1500 shot
+1600 btn 2
+1680 enc 2 1
+1780 shot
+1900 btn 12
+2050 btn 11
+2200 shot
+4200 end

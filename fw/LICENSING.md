@@ -1,6 +1,6 @@
 # Licensing
 
-Fmdac 0.1 is this Dinghy tree with the name FMDAC, package identity `FM-1_961`, USB name Fmdac, and an update loader that reports `ota-FM-1_961`. The Dinghy logo is not included. Upstream is https://github.com/zvenson/dinghy commit `22acb9165ebc8baa712af3aff8c507e230c1e028`.
+Fmdac 0.2 is this Dinghy tree with the name FMDAC, package identity `FM-1_962`, USB name Fmdac, and an update loader that reports `ota-FM-1_962`. The Dinghy logo is not included. Upstream is https://github.com/zvenson/dinghy commit `22acb9165ebc8baa712af3aff8c507e230c1e028`.
 
 Dinghy is free software under the GNU General Public License, version 3 only (`GPL-3.0-only`, full text in
 `LICENSE`). You may use, study, change and share it. If you give someone a firmware built from it, give them its
@@ -15,7 +15,8 @@ complete source under the same licence too. The package `docs/fmdac.fwsc` is bui
 | The TRS MIDI IN `firmware/src/midi_uart.c` | Felucca's, as sloopDX carries it, with the ring read by content from Felucca [Salt] 0.9-salt14 by ChanceTheMaker (found by keremimo) |
 | The update loader's screen: `firmware/loader/ldr_screen.c`, `tests/ldr_screen_test.c` | Copyright (C) 2026 zvenson (from OberVave, the Firmware Hub's look); the idea, a loader that draws, its 5 x 7 letters and the order of things from [Skiff](https://github.com/illuminus5/skiff) by illuminus5, GPL-3.0 |
 | From OberVave: the storage (blobs, slots), `LCD_IDLE`, the SMK-37 wiring of `platform.c`, `store.h`, the pad event queue in `smk_input.h`, `tests/smk_flash_test.c`, `tests/run_tests.sh`, the CI workflow | Copyright (C) 2026 zvenson |
-| The app `firmware/src/dinghy.c`, the wiring `platform.c`, the host mode `tests/`, the docs | zvenson |
+| The original Dinghy app shape, the wiring `platform.c`, the host mode `tests/`, the docs | zvenson. `firmware/src/dinghy.c` in this tree is the Fmdac 0.2 app |
+| Fmdac 0.2: `firmware/src/dinghy.c`, `firmware/src/cast_dac.c`, `firmware/src/cast_dac.h`, `firmware/src/cast_tab.h`, `tools/bake_cast.c`, `tools/cast_design.c`, `tools/cast_design.h` | GPL-3.0-only. `tools/cast_design.c` designs the filter tables on a computer and is not linked into the FM-1 image. `cast_tab.h` is the integer tables that image uses |
 
 ## Third-party material
 

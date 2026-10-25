@@ -2,14 +2,14 @@
   "current": {
     "id": "fmdac",
     "name": "Fmdac",
-    "version": "0.1",
+    "version": "0.2",
     "enabled": true,
-    "product": "FM-1_961",
+    "product": "FM-1_962",
     "size": 612188,
-    "sha256": "ecfae6bd4371dca807c8a1d0d0866ac9ccee1ee4969193a1b35ab02b89cb21d0",
+    "sha256": "38549383ef596318774b0b5827772ab9b7e3e30be82d17d5baf0d110aa55e1d3",
     "filename": "fmdac.fwsc",
     "source": "https://github.com/chinotto1/Fmdac",
-    "description": "Fmdac 0.1, identity FM-1_961, loads with this page. The screen says FMDAC. Keys play a tone, USB MIDI works, and audio from the computer reaches the headphones. Drum engines, MIDI-only tracks, take recording, the arpeggiator, and the converter are not in this file."
+    "description": "Fmdac 0.2, identity FM-1_962. The screen is parameters: FX, HOME, SEQ, EDIT, ARP, LFO, ENV, GLO. K1–K4 change the values. PLAY starts a 16-step drum pattern. Keys play a tone and send MIDI. FX runs the mix through Prophet VS, DX7, SP-1200, Emulator II, or S950 on the way to the headphones. The computer records that same mix. Audio from the computer is not converted. No sample ROMs, no take recorder, no OCTACHRON map."
   },
   "recovery": [
     {

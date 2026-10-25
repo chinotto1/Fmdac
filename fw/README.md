@@ -1,6 +1,10 @@
 # Fmdac firmware source
 
-This directory is [Dinghy](https://github.com/zvenson/dinghy) at commit `22acb9165ebc8baa712af3aff8c507e230c1e028`, built as Fmdac 0.1. The package identity is `FM-1_961`. The screen and the loader say FMDAC. The USB name is Fmdac. The Dinghy logo is not in this copy. `./build.sh --release 0.1` writes `build/fmdac-0.1.fwsc`.
+This directory is [Dinghy](https://github.com/zvenson/dinghy) at commit `22acb9165ebc8baa712af3aff8c507e230c1e028`, built as Fmdac 0.2. The package identity is `FM-1_962`. `./build.sh --release 0.2` writes `build/fmdac-0.2.fwsc`.
+
+Fmdac 0.2 opens on a parameter screen. HOME, FX, SEQ, EDIT, ARP, LFO, ENV, and GLO are pages. K1–K4 change the values on the page. PLAY starts an eight-pattern, 16-step drum machine (kick, snare, hat, tom). The keys play a tone and send MIDI. The FX page runs that mix through a Prophet VS, DX7, SP-1200, Emulator II, or S950 converter on the way to the headphones and to the USB recording input. Audio coming from the computer is not converted. There are no sample ROMs, no take recorder, and no OCTACHRON map.
+
+The picture below is Dinghy's original sine screen. It is not what Fmdac 0.2 draws.
 
 # Dinghy
 
