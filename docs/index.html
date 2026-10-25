@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#080910" />
+    <title>Fmdac · Install</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main>
+      <nav>
+        <a class="brand" href="https://github.com/chinotto1/Fmdac">Fmdac</a>
+        <a href="https://github.com/chinotto1/Fmdac">Source</a>
+      </nav>
+      <header>
+        <span class="eyebrow">FM-1</span>
+        <h1>Install Fmdac.</h1>
+        <p>
+          Connect one FM-1 with a USB data cable, in Chrome or Edge on a computer.
+          The package stays on this computer. Leave the cable in until the page says the FM-1 came back.
+        </p>
+      </header>
+      <noscript>
+        <p class="notice error">JavaScript is required to read the package and talk to the FM-1.</p>
+      </noscript>
+      <p id="browser-note" class="notice" role="status" hidden></p>
+
+      <section class="panel device" aria-labelledby="device-title">
+        <div>
+          <span class="eyebrow">1 · Connect</span>
+          <h2 id="device-title">The FM-1</h2>
+          <p id="device-status" role="status">Plug in one FM-1 and close other apps that use MIDI.</p>
+        </div>
+        <button id="connect" class="blue" type="button" disabled>Connect</button>
+      </section>
+
+      <section class="panel" aria-labelledby="package-title">
+        <span class="eyebrow">2 · Package</span>
+        <h2 id="package-title">The firmware file</h2>
+        <div class="tabs" role="group" aria-label="Which package">
+          <button id="mode-install" type="button" aria-pressed="true">Fmdac</button>
+          <button id="mode-recover" type="button" aria-pressed="false">Another firmware</button>
+        </div>
+        <div id="current-panel">
+          <div class="release-heading">
+            <strong id="current-title">Fmdac</strong>
+            <span id="current-badge" class="badge">Checking</span>
+          </div>
+          <p id="current-reason">Checking whether a package is published.</p>
+          <p class="small">Source: <a id="current-source" href="https://github.com/chinotto1/Fmdac">chinotto1/Fmdac</a></p>
+        </div>
+        <div id="recovery-panel" hidden>
+          <label for="firmware">Published package</label>
+          <select id="firmware"></select>
+          <p id="firmware-description"></p>
+          <a id="firmware-download" class="text-link" target="_blank" rel="noopener noreferrer" href="https://github.com/chinotto1/Fmdac">Get this package</a>
+        </div>
+        <div id="package-panel">
+          <label class="file-label" for="firmware-file">
+            Choose a .fwsc
+            <input id="firmware-file" type="file" accept=".fwsc,application/octet-stream" />
+          </label>
+          <p id="package-status" role="status">Choose the package. Its identity is checked on this computer.</p>
+          <details id="package-details">
+            <summary>Package details</summary>
+            <dl>
+              <dt>File</dt>
+              <dd id="package-name">—</dd>
+              <dt>Identity</dt>
+              <dd id="package-product">—</dd>
+              <dt>SHA-256</dt>
+              <dd id="package-hash">—</dd>
+            </dl>
+          </details>
+        </div>
+      </section>
+
+      <section class="panel action-panel" aria-labelledby="install-title">
+        <span class="eyebrow">3 · Install</span>
+        <h2 id="install-title">Write it to the FM-1</h2>
+        <p>
+          Installing replaces the firmware on the device. Keep the installer for what is on it now.
+          If a write stops, the FM-1 stays in update mode until this page finishes the same package.
+        </p>
+        <label class="check">
+          <input id="backup-saved" type="checkbox" />
+          <span>I can get back to the firmware on the FM-1 now, and I will leave the cable connected.</span>
+        </label>
+        <p id="action-help" class="notice" role="status">Loading the firmware list…</p>
+        <button id="install" class="primary" type="button" disabled>Install Fmdac</button>
+        <div class="progress-heading">
+          <strong id="transfer-stage" role="status">No update started</strong>
+          <span id="transfer-percent"></span>
+        </div>
+        <progress id="progress" max="100" value="0" aria-label="Firmware update progress"></progress>
+        <p id="transfer-help" class="small">The file stays on this computer.</p>
+      </section>
+
+      <section class="panel rescue" aria-labelledby="rescue-title">
+        <span class="eyebrow">If it stops</span>
+        <h2 id="rescue-title">Finish or recover</h2>
+        <p>
+          The screen says UPDATE, or it stays dark after a write has started: plug the FM-1 in, connect, and choose the same package.
+          This page finishes an update only with the matching file.
+        </p>
+        <p>
+          The FM-1 does not start: switch it off, hold <strong>OCT−</strong>, and switch it on. The screen says USB RESCUE. Install again from this page.
+        </p>
+        <p>
+          Windows shows a disk named WL80UBOOT and no MIDI port. That is the chip's own boot mode, and this page has no way to speak to it.
+          From a computer, use <a href="https://github.com/kurogedelic/FM-1-transporter" target="_blank" rel="noopener noreferrer">FM-1-transporter</a>.
+        </p>
+      </section>
+
+      <details class="technical">
+        <summary>Connection log</summary>
+        <pre id="log" aria-label="Connection log"></pre>
+        <button id="save-log" type="button">Save log</button>
+      </details>
+
+      <footer>
+        <a href="https://github.com/chinotto1/Fmdac">Source</a>
+        <a href="https://github.com/chinotto1/Fmdac/blob/main/LICENSE">GPL-3.0</a>
+        <span>
+          The update protocol is adapted from Skiff and Felucca by Leo Kuroshita, Hügelton Instruments.
+          Installing firmware can leave an FM-1 unable to start until it is recovered. There is no warranty.
+          M-VAVE and FM-1 are trademarks of their owners.
+        </span>
+      </footer>
+    </main>
+
+    <dialog id="confirm-dialog" aria-labelledby="confirm-title">
+      <span class="eyebrow">Confirm</span>
+      <h2 id="confirm-title">Install this firmware?</h2>
+      <p id="confirm-description"></p>
+      <dl>
+        <dt>Connected device</dt>
+        <dd id="confirm-device"></dd>
+        <dt>Package</dt>
+        <dd id="confirm-file"></dd>
+        <dt>SHA-256</dt>
+        <dd id="confirm-hash"></dd>
+      </dl>
+      <p>Keep the USB cable connected and the computer awake until the FM-1 comes back.</p>
+      <div class="dialog-actions">
+        <button id="confirm-cancel" type="button" autofocus>Cancel</button>
+        <button id="confirm-install" class="primary" type="button">Install this firmware</button>
+      </div>
+    </dialog>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

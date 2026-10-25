@@ -1,0 +1,49 @@
+{
+  "current": {
+    "id": "fmdac",
+    "name": "Fmdac",
+    "version": "unpublished",
+    "enabled": false,
+    "reason": "No Fmdac package is published yet. Choose a .fwsc to check it and install it. Add docs/fmdac.fwsc and fill in this entry to make the page load that package itself.",
+    "source": "https://github.com/chinotto1/Fmdac",
+    "filename": "fmdac.fwsc"
+  },
+  "recovery": [
+    {
+      "id": "skiff-1.3.2",
+      "name": "Skiff",
+      "version": "1.3.2",
+      "enabled": true,
+      "product": "FM-1_713",
+      "size": 611605,
+      "sha256": "d77f60a500df772a136358fafba716e8be3d6311dd56430749d5ebb9f476584d",
+      "filename": "skiff-1.3.2.fwsc",
+      "download": "https://github.com/illuminus5/skiff/releases/download/v1.3.2/skiff-1.3.2.fwsc",
+      "description": "Skiff 1.3.2, identity FM-1_713. Save a backup in its editor before leaving it."
+    },
+    {
+      "id": "sloop-2.7.1",
+      "name": "SLOOP",
+      "version": "2.7.1",
+      "enabled": true,
+      "product": "FM-1_900",
+      "size": 610035,
+      "sha256": "7c9d269d15d1c1a48e0ebada7ffa2c2aa196c19d51056fd3f760d322322b335f",
+      "filename": "sloop-2.7.1.fwsc",
+      "download": "https://github.com/isod89/sloop-fm1/releases/download/v2.7.1/sloop-2.7.1.fwsc",
+      "description": "SLOOP 2.7.1, identity FM-1_900. Projects from another firmware stay in their own editor."
+    },
+    {
+      "id": "official-016",
+      "name": "M-VAVE official",
+      "version": "FM-1_016",
+      "enabled": true,
+      "product": "FM-1_016",
+      "size": 718196,
+      "sha256": "d017fb65e70aca97ee29d944470c3515a74581df5c0576bf70de917c7b2b61d5",
+      "filename": "FM-1.fwsc",
+      "download": "https://yms-file-store.oss-cn-hongkong.aliyuncs.com/software/firmware/FM-1.fwsc",
+      "description": "The FM-1.fwsc from M-VAVE's download on October 25, 2026. Its identity is FM-1_016. If a newer download no longer matches this checksum, choose that file on the Fmdac tab: its identity is shown before anything is written."
+    }
+  ]
+}
