@@ -82,18 +82,16 @@ button.blue { background: var(--blue); color: var(--text); white-space: nowrap; 
 label { font-size: 13px; font-weight: 750; }
 select { display: block; width: 100%; margin: 8px 0 12px; }
 #package-panel { margin-top: 22px; padding-top: 22px; border-top: 1px solid var(--line); }
-.file-label { display: block; font-size: 13px; background: #080910; }
-input[type="file"] { display: block; width: 100%; max-width: 100%; font-size: 12px; margin-top: 12px; }
-input::file-selector-button {
-  font: inherit;
-  font-weight: 750;
-  padding: 10px 12px;
-  border: 1px solid #657596;
-  border-radius: 5px;
-  background: var(--blue);
-  color: var(--text);
-  margin-right: 10px;
-  cursor: pointer;
+.file-label { display: inline-flex; align-items: center; width: fit-content; font-size: 13px; background: #080910; cursor: pointer; }
+.file-label input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
 }
 #package-status { font-weight: 750; }
 .valid { color: var(--green); }

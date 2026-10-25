@@ -67,6 +67,7 @@ function render() {
   }
   $("connect").disabled = busy || !supported || !catalog;
   $("connect").textContent = device ? "Reconnect" : "Connect";
+  $("file-label").textContent = mode === "install" && prepared ? "Use a different .fwsc" : "Choose a .fwsc";
   $("install").textContent = installLabel();
   const reason = reasonNow();
   $("install").disabled = busy || !!reason;
@@ -140,26 +141,49 @@ async function takeFile(file) {
 }
 
 async function loadBundled() {
-  if (mode !== "install" || !catalog) return;
+  if (mode !== "install" || !catalog?.current?.enabled) return;
   const token = epoch;
+  $("package-status").textContent = "Loading Fmdac…";
+  $("package-status").className = "";
   let response;
   try {
     response = await fetch("./fmdac.fwsc", {cache: "no-cache"});
-  } catch {
+  } catch (error) {
+    if (token !== epoch) return;
+    $("package-status").textContent = "This page could not load fmdac.fwsc. Reload the page.";
+    $("package-status").className = "error";
+    log(`The bundled fmdac.fwsc was left unused: ${error.message}`);
+    render();
     return;
   }
-  if (!response.ok || token !== epoch || mode !== "install") return;
+  if (token !== epoch || mode !== "install") return;
+  if (!response.ok) {
+    $("package-status").textContent = "This page could not load fmdac.fwsc. Reload the page.";
+    $("package-status").className = "error";
+    log(`The bundled fmdac.fwsc was left unused: HTTP ${response.status}.`);
+    render();
+    return;
+  }
   const type = response.headers.get("content-type") || "";
-  if (type.includes("text/html")) return;
+  if (type.includes("text/html")) {
+    $("package-status").textContent = "This page could not load fmdac.fwsc. Reload the page.";
+    $("package-status").className = "error";
+    log("The bundled fmdac.fwsc was left unused: the server returned a page.");
+    render();
+    return;
+  }
   try {
     const bytes = new Uint8Array(await response.arrayBuffer());
     if (token !== epoch || mode !== "install") return;
-    const checked = await acceptPackage(bytes, catalog.current, catalog.current.enabled === true);
+    const checked = await acceptPackage(bytes, catalog.current, true);
     if (token !== epoch || mode !== "install") return;
     remember(checked, "fmdac.fwsc");
-    $("package-status").textContent = `Loaded fmdac.fwsc from this page · ${checked.product}`;
+    $("package-status").textContent = `Loaded with this page · ${checked.product} · Fmdac ${catalog.current.version}`;
   } catch (error) {
     if (token !== epoch) return;
+    prepared = null;
+    $("package-status").textContent = error.message;
+    $("package-status").className = "error";
     log(`The bundled fmdac.fwsc was left unused: ${error.message}`);
   }
   if (token === epoch) render();
@@ -236,6 +260,7 @@ $("install").addEventListener("click", () => {
     epoch,
   };
   $("confirm-description").textContent = `Write ${prepared.product} to this FM-1?`;
+  $("confirm-limit").hidden = mode !== "install";
   $("confirm-device").textContent = `${device.name} · ${device.identity}`;
   $("confirm-file").textContent = `${prepared.filename} · ${prepared.product}`;
   $("confirm-hash").textContent = prepared.digest;
@@ -336,10 +361,10 @@ async function init() {
     const data = assertCatalog(await response.json());
     catalog = data;
     $("current-title").textContent = data.current.name;
-    $("current-badge").textContent = data.current.enabled === true ? "Package published" : "No package published";
+    $("current-badge").textContent = data.current.enabled === true ? "Loaded with this page" : "No package published";
     $("current-badge").classList.toggle("ready", data.current.enabled === true);
     $("current-reason").textContent = data.current.enabled === true
-      ? `Fmdac ${data.current.version} is published as ${data.current.filename}.`
+      ? (data.current.description || `Fmdac ${data.current.version} is on this page as ${data.current.filename}.`)
       : data.current.reason;
     $("current-source").href = data.current.source || "https://github.com/chinotto1/Fmdac";
     $("firmware").replaceChildren(...data.recovery.map((release) => new Option(`${release.name} ${release.version}`, release.id)));

@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#080910" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23080910'/%3E%3Crect x='3' y='7' width='10' height='2' fill='%23f4bf35'/%3E%3C/svg%3E" />
     <title>Fmdac · Install</title>
     <link rel="stylesheet" href="./style.css" />
   </head>
@@ -17,8 +18,13 @@
         <span class="eyebrow">FM-1</span>
         <h1>Install Fmdac.</h1>
         <p>
-          Connect one FM-1 with a USB data cable, in Chrome or Edge on a computer.
-          The package stays on this computer. Leave the cable in until the page says the FM-1 came back.
+          Fmdac 0.1 loads with this page. Connect one FM-1 with a USB data cable, in Chrome or Edge on a computer.
+          Leave the cable in until the page says the FM-1 came back.
+        </p>
+        <p>
+          This file is a bootable first image. The screen says FMDAC, the keys play a tone, USB MIDI works, and audio from the computer reaches the headphones.
+          Drum engines, MIDI-only tracks, take recording, the arpeggiator, and the converter are not in this file.
+          Installing replaces the firmware that is on the FM-1.
         </p>
       </header>
       <noscript>
@@ -47,7 +53,7 @@
             <strong id="current-title">Fmdac</strong>
             <span id="current-badge" class="badge">Checking</span>
           </div>
-          <p id="current-reason">Checking whether a package is published.</p>
+          <p id="current-reason">Loading Fmdac 0.1.</p>
           <p class="small">Source: <a id="current-source" href="https://github.com/chinotto1/Fmdac">chinotto1/Fmdac</a></p>
         </div>
         <div id="recovery-panel" hidden>
@@ -58,10 +64,10 @@
         </div>
         <div id="package-panel">
           <label class="file-label" for="firmware-file">
-            Choose a .fwsc
+            <span id="file-label">Loading the package…</span>
             <input id="firmware-file" type="file" accept=".fwsc,application/octet-stream" />
           </label>
-          <p id="package-status" role="status">Choose the package. Its identity is checked on this computer.</p>
+          <p id="package-status" role="status">Loading Fmdac.</p>
           <details id="package-details">
             <summary>Package details</summary>
             <dl>
@@ -80,8 +86,8 @@
         <span class="eyebrow">3 · Install</span>
         <h2 id="install-title">Write it to the FM-1</h2>
         <p>
-          Connecting reads the FM-1. Install turns on when a firmware file is ready.
-          A confirmation still appears before anything is written. Keep the installer for what is on the device now.
+          The package is already on this page. Install turns on after the FM-1 is connected.
+          A confirmation still appears before anything is written. Keep a way back to the firmware that is on the device now.
         </p>
         <p id="action-help" class="notice" role="status">Loading the firmware list…</p>
         <button id="install" class="primary" type="button" disabled>Install Fmdac</button>
@@ -130,6 +136,7 @@
       <span class="eyebrow">Confirm</span>
       <h2 id="confirm-title">Install this firmware?</h2>
       <p id="confirm-description"></p>
+      <p id="confirm-limit">Fmdac 0.1 plays a tone. It does not contain the drum machine or the converter. It replaces the firmware on this FM-1.</p>
       <dl>
         <dt>Connected device</dt>
         <dd id="confirm-device"></dd>
