@@ -1,10 +1,10 @@
 # Fmdac firmware source
 
-This directory is [Dinghy](https://github.com/zvenson/dinghy) at commit `22acb9165ebc8baa712af3aff8c507e230c1e028`, built as Fmdac 0.3. The package identity is `FM-1_963`. `./build.sh --release 0.3` writes `build/fmdac-0.3.fwsc`.
+This directory is [Dinghy](https://github.com/zvenson/dinghy) at commit `22acb9165ebc8baa712af3aff8c507e230c1e028`, built as Fmdac 0.4. The package identity is `FM-1_964`. `./build.sh --release 0.4` writes `build/fmdac-0.4.fwsc`.
 
-Fmdac 0.3 opens on a parameter screen. The header names the track, KICK, SNARE, HAT, or TOM. SELECT, SEL, and K4 on SEQ change it. HOME, FX, SEQ, EDIT, ARP, LFO, ENV, and GLO are pages. K1–K4 change the values on the page. PLAY starts an eight-pattern, 16-step drum machine. A hit decays to silence. The keys play a tone and send MIDI. The FX page runs that mix through a Prophet VS, DX7, SP-1200, Emulator II, or S950 converter on the way to the headphones and to the USB recording input. Audio coming from the computer is not converted. There are no sample ROMs, no take recorder, and no OCTACHRON map.
+Fmdac 0.4 opens on a parameter screen. The header names the track: KICK, SNARE, HAT, TOM, or a silent MIDI track M1–M4. SELECT, SEL, and K4 change it. HOME cycles a synthesized 808, 909, CR-78, or SDS character. Press SEQ again to move from the step grid to a keys-and-cursor piano roll, then to a song chain. PLAY walks that chain when its length is more than one pattern. REC while stopped quantizes a short performance into the pattern and sets the BPM. ARP adds chord, order, and latch. A second press of ENV sends a MIDI CC envelope. EDIT sets GM drum notes and the MIDI-track channels. The FX page runs the headphone mix through a Prophet VS, DX7, SP-1200, Emulator II, or S950 converter. While a computer streams audio to the FM-1, that stereo stream is converted too. When nothing is streaming, the headphones hear the FM-1's own mix. The computer records the headphone mix. There are no sample ROMs and no OCTACHRON factory map. The take is quantized, not a looper.
 
-The picture below is Dinghy's original sine screen. It is not what Fmdac 0.3 draws.
+The picture below is Dinghy's original sine screen. It is not what Fmdac 0.4 draws.
 
 # Dinghy
 

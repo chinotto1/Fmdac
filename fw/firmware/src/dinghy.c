@@ -1,23 +1,32 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Fmdac 0.3. Pages, synthesized drums, a 16-step pattern, and the converter.
+/* Fmdac 0.4. Drums, MIDI tracks, a sequencer, and the converter.
  *
  *   FX     machine, bits, rate, tone. Press FX again: wet, drive, bits, rate.
- *          The law is on the mix this FM-1 plays. Headphones hear that mix.
- *          USB audio records it. Audio from the computer is not an input.
- *   HOME   drum levels. Black keys F# G# A# C# hit the four drums.
- *   SEQ    white keys are the 16 steps. K4 is the track. PLAY starts.
- *          REC writes the playhead.
- *   EDIT   tune, decay, snap, drop of the track. Any key hits that drum.
- *   ARP    up, down, up-down, random. Held keys, MIDI out.
+ *          The law is on the headphones. While a computer streams USB audio,
+ *          that stream is mixed in and converted too. USB audio also records
+ *          the headphone mix.
+ *   HOME   drum levels. Press HOME again to change the drum character:
+ *          808, 909, CR78, SDS. These are synthesized, not sample ROMs.
+ *          Black keys F# G# A# C# hit the four drums.
+ *   GRID   SEQ. White keys are the 16 steps. K4 is the track. PLAY starts.
+ *          Press SEQ again for PIANO, again for SONG, again for GRID.
+ *   PIANO  keys write the selected MIDI track and move the cursor.
+ *   SONG   16 slots. K1 picks the slot, K2 the pattern, K3 the length.
+ *          PLAY walks the chain when the length is more than one.
+ *   EDIT   tune, decay, snap, drop of a drum. Press EDIT again: the GM note
+ *          of each drum, or the channel of each MIDI track. There is no
+ *          OCTACHRON map in this file.
+ *   ARP    up, down, up-down, random, chord, and as-played. Press ARP again
+ *          to latch the held keys.
  *   LFO    MIDI CC, and level or tune on this mix when DEST says so.
- *   ENV    attack, decay, sustain, release of the key tone.
+ *   ENV    attack, decay, sustain, release of the key tone. Press ENV again:
+ *          a MIDI CC envelope on each new note.
  *   GLO    tempo, swing, length, MIDI channel. OCT+ twice clears the pattern.
- *   The track is KICK, SNARE, HAT, or TOM. SELECT and SEL both change it,
- *   on every page, and the header shows the name. PRESETS is the pattern.
- *   ALGORITHM is the tempo. OCT shifts the keys.
- *
- * Not in this file: sample ROMs, MIDI-only tracks, an OCTACHRON map,
- * retrospective take, a piano roll, a song chain, host-to-device USB audio.
+ *   REC while stopped quantizes the last few seconds into this pattern and
+ *   sets the tempo. REC while playing overdubs the playhead. PLAY then plays
+ *   that quantized pattern. It is not a free looper.
+ *   Tracks: KICK SNARE HAT TOM, then M1 M2 M3 M4. M1-M4 send MIDI and do not
+ *   sound here. SELECT and SEL change the track.
  *
  * Integers only. No float, no 64-bit division. Converter coefficients are
  * cast_tab.h, baked on a computer by tools/bake_cast.c. */
@@ -33,49 +42,76 @@ static void app_idle(void);
 #include "cast_tab.h"
 #include "cast_dac.c"
 
-#define SET_VER 3u
-#define KEY0 53u
+#ifdef DINGHY_HOST
+static int uac_play_on(void) { return 0; }
+static int uac_play_frame(int32_t *l, int32_t *r) { *l = 0; *r = 0; return 0; }
+#endif
+
+#define SET_VER 4u
 enum { PG_FX, PG_HOME, PG_SEQ, PG_EDIT, PG_ARP, PG_LFO, PG_ENV, PG_GLO, PG_N };
+enum { VW_GRID, VW_PIANO, VW_SONG };
 
 typedef struct {
     uint8_t ver;
     int8_t oct;
-    uint8_t ch, tempo, swing, length, pattern, track, machine;
+    uint8_t ch, tempo, swing, length, pattern, track, machine, engine;
     uint8_t bits[6], rate[6], tone[6];
     uint8_t wet, drive;
     uint8_t mix[4];
     uint8_t drum[4][4];             /* tune, decay, snap, drop */
     uint8_t atk, dec, sus, rel;
-    uint8_t arp_mode, arp_div, arp_gate, arp_oct;
+    uint8_t arp_mode, arp_div, arp_gate, arp_oct, arp_latch;
     uint8_t lfo_rate, lfo_depth, lfo_cc, lfo_dest;
-    uint8_t pat[8][4][16];
+    uint8_t env_on, env_cc, env_amt;
+    uint8_t gm[4];
+    uint8_t mnote[4];
+    uint8_t mch[4];
+    uint8_t song[16];
+    uint8_t song_len;
+    uint8_t pat[8][8][16];          /* drum velocity, or MIDI note (0 = rest) */
+    uint8_t pvel[8][4][16];
 } Set;
 typedef char set_fits[(sizeof(Set) <= 4000u) ? 1 : -1];
 
 static volatile Set set;
-static uint8_t page, fx_alt, rec, hot, save_req;
-static volatile uint8_t seq_run, audio_ready, sounding, ext_on, fx_bypass;
-static uint8_t idle_ok, in_midi;
+static uint8_t page, fx_alt, env_alt, edit_alt, seq_view, rec, hot, save_req, song_slot;
+static volatile uint8_t seq_run, audio_ready, sounding, ext_on, fx_bypass, song_i;
+static uint8_t idle_ok, in_midi, down_count;
+static uint32_t t_change, dirty;
 static volatile uint32_t seq_epoch, seq_gen, ext_count, clk_out_n, wet_q8;
 static volatile uint8_t seq_pos, seq_vel_out[4], trig_n[4], trig_v[4];
+static volatile uint8_t seq_mnote[4], seq_mvel[4];
 static volatile uint8_t gain[4];
 static volatile int32_t lfo_tune, lfo_lvl = 256;
-static CastDac live;
+static CastDac live, live_r;
 
 static const uint32_t INC_C9[12] = {
     815363807u, 863847862u, 915214929u, 969636441u, 1027294024u, 1088380105u,
     1153098554u, 1221665363u, 1294309365u, 1371273005u, 1452813141u, 1539201906u};
-static const uint32_t DRUM_F[4] = {4480011u, 17530479u, 0u, 9739155u}; /* 46, 180, hat, 100 Hz */
+static const uint32_t DRUM_F[4] = {4480011u, 17530479u, 0u, 9739155u};
 static const uint16_t TUNE_Q12[11] = {
     2048, 2340, 2676, 3059, 3497, 4096, 4796, 5616, 6576, 7700, 8192};
+/* Original integer characters in the spirit of a modeled 808, 909, CR-78, and SDS.
+ * Not those machines' sample ROMs. Pitch and drop are Q8, body and noise are Q7. */
+static const uint16_t ENG_PITCH[4] = {240, 280, 176, 360};
+static const uint16_t ENG_DROP[4] = {320, 200, 140, 96};
+static const uint8_t ENG_CLICK[4] = {2, 7, 1, 4};
+static const uint8_t ENG_BODY[4] = {140, 70, 100, 110};
+static const uint8_t ENG_NOISE[4] = {90, 170, 60, 150};
+static const uint8_t ENG_HAT[4] = {1, 0, 3, 1};
+static const int8_t ENG_DEC[4] = {10, -8, 16, -4};
 static const uint8_t BITV[5] = {8, 10, 12, 14, 16};
-static const uint8_t GM[4] = {36, 38, 42, 45};
 static const char *const MACH[6] = {"VS", "DX7", "SP-1200", "EMU II", "S950", "OFF"};
 static const char *const TNAM[5] = {"RAW", "DARK", "OPEN", "BRIGHT", "FULL"};
-static const char *const TRK[4] = {"KICK", "SNARE", "HAT", "TOM"};
-static const char *const MODE[5] = {"OFF", "UP", "DOWN", "UP-DN", "RAND"};
+static const char *const TRK[8] = {"KICK", "SNARE", "HAT", "TOM", "M1", "M2", "M3", "M4"};
+static const char *const ENG[4] = {"808", "909", "CR78", "SDS"};
+static const char *const ENGMSG[4] = {"ENGINE 808", "ENGINE 909", "ENGINE CR78", "ENGINE SDS"};
+static const char *const ENGNXT[4] = {
+    "PRESS HOME FOR 909", "PRESS HOME FOR CR78", "PRESS HOME FOR SDS", "PRESS HOME FOR 808"};
+static const char *const MODE[7] = {"OFF", "UP", "DOWN", "UP-DN", "RAND", "CHORD", "ORDER"};
 static const char *const DIVN[4] = {"1/4", "1/8", "1/16", "1/32"};
 static const char *const DEST[3] = {"OFF", "TUNE", "LEVEL"};
+static const char *const NTN[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
 
 static uint32_t clampu(int v, int lo, int hi) {
     if (v < lo) return (uint32_t)lo;
@@ -117,8 +153,27 @@ static uint32_t put_u_at(char *d, uint32_t n, uint32_t i, uint32_t v) {
     put_u(b, 12, v);
     return put_str(d, n, i, b);
 }
+static void note_text(char *d, uint32_t note) {
+    uint32_t n, oct;
+    if (!note || note > 127u) { put_str(d, 12, 0, "REST"); return; }
+    n = put_str(d, 12, 0, NTN[note % 12u]);
+    oct = note / 12u;
+    if (oct) put_u(d + n, 12u - n, oct - 1u);
+    else put_str(d, 12, n, "0");
+}
+static uint32_t trk(void) { return set.track > 7u ? 0u : set.track; }
+static uint32_t engi(void) { return set.engine > 3u ? 0u : set.engine; }
 
-/* ---- drums and keys (the audio ISR owns the oscillators) ---- */
+static int32_t fall(int32_t a, uint32_t sh) {
+    int32_t s;
+    if (a <= 0) return 0;
+    if (sh > 14u) sh = 14u;
+    s = a >> sh;
+    if (s < 1) s = 1;
+    a -= s;
+    return a < 20 ? 0 : a;
+}
+
 typedef struct {
     uint32_t ph, inc, target;
     int32_t amp, namp, lp;
@@ -129,9 +184,10 @@ static Drum drumv[4];
 
 static void drum_hit(uint32_t d, uint32_t vel) {
     Drum *v;
-    uint32_t tune, snap, drop, i, f, mul, base, end;
+    uint32_t tune, snap, drop, i, f, mul, base, end, extra, eng;
     if (d > 3u || !vel) return;
     if (vel > 127u) vel = 127u;
+    eng = engi();
     v = &drumv[d];
     tune = set.drum[d][0];
     snap = set.drum[d][2];
@@ -144,36 +200,41 @@ static void drum_hit(uint32_t d, uint32_t vel) {
     if (i > 10u) i = 10u;
     mul = TUNE_Q12[i];
     if (i < 10u && f) mul += (uint32_t)(TUNE_Q12[i + 1u] - mul) * f / 10u;
-        if (d == 2u) {
-            v->amp = 0;
-            v->namp = (int32_t)vel * 140;
-            if (v->namp > 20000) v->namp = 20000;
-            v->lp = 0;
-            v->click = 0;
-        } else {
-            base = (uint32_t)(((uint64_t)DRUM_F[d] * mul) >> 12);
-            end = base ? base : 1u;
-            v->target = end;
-            v->inc = end + (uint32_t)(((uint64_t)end * drop) >> 4);
-            v->ph = 0;
-            v->amp = (int32_t)vel * 110;
-            if (v->amp > 20000) v->amp = 20000;
-            v->click = 0;
-            v->namp = 0;
-            if (d == 1u) {
-                v->namp = (int32_t)vel * (int32_t)snap;
-                if (v->namp > 18000) v->namp = 18000;
-            } else {
-                v->click = (uint16_t)(snap * 3u);
-            }
-        }
+    v->lp = 0;
+    if (d == 2u) {
+        v->amp = 0;
+        v->namp = (int32_t)vel * 140;
+        if (v->namp > 20000) v->namp = 20000;
+        v->click = 0;
+    } else {
+        base = (uint32_t)(((uint64_t)DRUM_F[d] * mul) >> 12);
+        end = (uint32_t)(((uint64_t)(base ? base : 1u) * ENG_PITCH[eng]) >> 8);
+        if (!end) end = 1u;
+        v->target = end;
+        extra = (uint32_t)(((uint64_t)end * drop) >> 4);
+        extra = (uint32_t)(((uint64_t)extra * ENG_DROP[eng]) >> 8);
+        v->inc = end + extra;
+        v->ph = 0;
+        v->amp = (int32_t)vel * 110;
+        if (v->amp > 20000) v->amp = 20000;
+        v->click = 0;
+        v->namp = 0;
+        if (d == 1u) {
+            v->amp = (int32_t)(((int64_t)v->amp * ENG_BODY[eng]) >> 7);
+            v->namp = (int32_t)vel * (int32_t)snap;
+            if (v->namp > 18000) v->namp = 18000;
+            v->namp = (int32_t)(((int64_t)v->namp * ENG_NOISE[eng]) >> 7);
+            if (v->namp > 24000) v->namp = 24000;
+            if (v->amp > 24000) v->amp = 24000;
+        } else v->click = (uint16_t)(snap * ENG_CLICK[eng]);
+    }
     v->alive = 1;
 }
 
 typedef struct {
     uint32_t inc, ph, age;
     int32_t amp, peak, sus;
-    uint8_t note, stage;            /* 0 off, 1 attack, 2 decay, 3 hold, 4 release */
+    uint8_t note, stage;
 } Voice;
 #define NV 4u
 static Voice voice[NV];
@@ -214,18 +275,6 @@ static void tones_release(void) {
 static uint8_t step_i, trig_seen[4];
 static uint32_t step_acc, clk_acc, epoch_seen, ext_seen, clk_len_hold;
 
-/* Always reaches zero. A bare "a -= a >> sh" freezes once a is below 2^sh,
- * and a hit then hisses forever. */
-static int32_t fall(int32_t a, uint32_t sh) {
-    int32_t s;
-    if (a <= 0) return 0;
-    if (sh > 14u) sh = 14u;
-    s = a >> sh;
-    if (s < 1) s = 1;
-    a -= s;
-    return a < 20 ? 0 : a;
-}
-
 static uint32_t step_len(uint32_t idx, uint32_t tempo, uint32_t swing) {
     uint32_t eighth, longl, shortl;
     if (tempo < 40u) tempo = 40u;
@@ -247,21 +296,45 @@ static void render_step(void) {
     if (step_i >= len) step_i = 0;
     for (d = 0; d < 4u; d++) {
         uint8_t v = *(volatile uint8_t *)&set.pat[p][d][step_i];
+        uint8_t note = *(volatile uint8_t *)&set.pat[p][4u + d][step_i];
+        uint8_t mv = *(volatile uint8_t *)&set.pvel[p][d][step_i];
+        if (v > 127u) v = 127u;
+        if (note > 127u) note = 0;
         seq_vel_out[d] = v;
+        seq_mnote[d] = note;
+        seq_mvel[d] = note ? (mv ? mv : 100u) : 0;
         if (v) drum_hit(d, v);
     }
     seq_pos = step_i;
     seq_gen++;
 }
+static void advance_step(uint32_t len) {
+    uint32_t sl, si;
+    step_i++;
+    if (step_i >= len) {
+        step_i = 0;
+        sl = set.song_len;
+        if (sl > 1u) {
+            if (sl > 16u) sl = 16u;
+            si = (uint32_t)song_i + 1u;
+            if (si >= sl) si = 0;
+            song_i = (uint8_t)si;
+            set.pattern = set.song[si];
+        }
+    }
+    render_step();
+}
 
 static void app_audio(int32_t *out, uint32_t n) {
-    uint32_t i, d, tempo, swing, len, sh[4], tune[4], drop[4], gv[4];
+    uint32_t i, d, tempo, swing, len, sh[4], tune[4], drop[4], gv[4], eng;
     int32_t lt, lvl, wq;
     uint32_t any = 0;
+    int ext;
     if (!audio_ready) return;
     tempo = set.tempo;
     swing = set.swing;
     len = set.length;
+    eng = engi();
     if (tempo < 40u) tempo = 40u;
     if (len < 1u) len = 1u;
     if (len > 16u) len = 16u;
@@ -271,12 +344,13 @@ static void app_audio(int32_t *out, uint32_t n) {
     if (lvl > 512) lvl = 512;
     wq = (int32_t)wet_q8;
     for (d = 0; d < 4u; d++) {
-        uint32_t dec = set.drum[d][1];
+        int decs = (int)set.drum[d][1] + (int)ENG_DEC[eng];
         gv[d] = gain[d];
         tune[d] = set.drum[d][0];
         drop[d] = set.drum[d][3];
-        if (dec > 100u) dec = 100u;
-        sh[d] = 6u + dec * 8u / 100u;
+        if (decs < 0) decs = 0;
+        if (decs > 100) decs = 100;
+        sh[d] = 6u + (uint32_t)decs * 8u / 100u;
         if (trig_n[d] != trig_seen[d]) {
             trig_seen[d] = trig_n[d];
             drum_hit(d, trig_v[d]);
@@ -294,18 +368,14 @@ static void app_audio(int32_t *out, uint32_t n) {
         uint32_t want = ext_count, guard = 0;
         while (ext_seen != want && guard++ < 4u) {
             ext_seen++;
-            step_i++;
-            if (step_i >= len) step_i = 0;
-            render_step();
+            advance_step(len);
         }
     } else if (seq_run) {
         uint32_t lim = step_len(step_i, tempo, swing), guard = 0, cl = 110250u / tempo;
         step_acc += n;
         while (step_acc >= lim && guard++ < 4u) {
             step_acc -= lim;
-            step_i++;
-            if (step_i >= len) step_i = 0;
-            render_step();
+            advance_step(len);
             lim = step_len(step_i, tempo, swing);
         }
         if (cl < 64u) cl = 64u;
@@ -325,18 +395,18 @@ static void app_audio(int32_t *out, uint32_t n) {
         rs = 6u + rel / 10u;
         for (d = 0; d < NV; d++) {
             Voice *v = &voice[d];
-            uint32_t ph, step;
+            uint32_t ph, inc;
             int32_t amp;
             if (!v->stage && !v->amp) continue;
             any = 1;
             if (v->peak) v->sus = v->peak * (int32_t)sus / 100;
             ph = v->ph;
             amp = v->amp;
-            step = (uint32_t)(((uint64_t)v->inc * bend_q16) >> 16);
+            inc = (uint32_t)(((uint64_t)v->inc * bend_q16) >> 16);
             if (lt) {
                 int32_t m = 1024 + lt;
                 if (m < 256) m = 256;
-                step = (uint32_t)(((int64_t)step * m) >> 10);
+                inc = (uint32_t)(((int64_t)inc * m) >> 10);
             }
             for (i = 0; i < n; i++) {
                 int32_t s;
@@ -345,9 +415,9 @@ static void app_audio(int32_t *out, uint32_t n) {
                     if (amp >= v->peak) { amp = v->peak; v->stage = 2u; }
                 } else if (v->stage == 2u) {
                     if (amp > v->sus) {
-                        int32_t step = (amp - v->sus) >> ds;
-                        if (step < 1) step = 1;
-                        amp -= step;
+                        int32_t sub = (amp - v->sus) >> ds;
+                        if (sub < 1) sub = 1;
+                        amp -= sub;
                         if (amp < v->sus) amp = v->sus;
                     } else v->stage = 3u;
                 } else if (v->stage == 3u) {
@@ -356,7 +426,7 @@ static void app_audio(int32_t *out, uint32_t n) {
                     amp = fall(amp, rs);
                     if (!amp) v->stage = 0;
                 }
-                ph += step;
+                ph += inc;
                 s = amp ? (sine(ph) * amp) >> 15 : 0;
                 out[2u * i] += (s * 100) >> 7;
             }
@@ -372,12 +442,12 @@ static void app_audio(int32_t *out, uint32_t n) {
         any = 1;
         gs = (int32_t)gv[d];
         dsh = sh[d];
-        cut = 1u + (tune[d] > 100u ? 0u : (100u - tune[d]) / 25u);
+        cut = 1u + (tune[d] > 100u ? 0u : (100u - tune[d]) / 25u) + ENG_HAT[eng];
         if (cut < 1u) cut = 1u;
-        if (cut > 6u) cut = 6u;
+        if (cut > 8u) cut = 8u;
         for (i = 0; i < n; i++) {
             int32_t s = 0;
-            uint32_t step;
+            uint32_t osc;
             if (d == 2u) {
                 int32_t nz = noise(), hp, mixed;
                 v->lp += (nz - v->lp) >> cut;
@@ -386,20 +456,24 @@ static void app_audio(int32_t *out, uint32_t n) {
                 s = (mixed * v->namp) >> 15;
                 v->namp = fall(v->namp, dsh);
             } else {
-                step = v->inc;
+                osc = v->inc;
                 if (lt) {
                     int32_t m = 1024 + lt;
                     if (m < 256) m = 256;
-                    step = (uint32_t)(((int64_t)step * m) >> 10);
+                    osc = (uint32_t)(((int64_t)osc * m) >> 10);
                 }
                 s = (sine(v->ph) * v->amp) >> 15;
-                v->ph += step;
+                v->ph += osc;
                 if (v->click) { s += noise() >> 2; v->click--; }
                 if (d == 1u) {
                     s += (noise() * v->namp) >> 15;
                     v->namp = fall(v->namp, dsh > 1u ? dsh - 1u : 1u);
                 }
                 v->amp = fall(v->amp, dsh);
+                if (eng == 2u) {
+                    v->lp += (s - v->lp) >> 2;
+                    s = v->lp;
+                }
                 if (v->inc > v->target) {
                     uint32_t diff = v->inc - v->target, st = diff >> 10;
                     v->inc = st ? v->inc - st : v->target;
@@ -410,21 +484,46 @@ static void app_audio(int32_t *out, uint32_t n) {
         }
         if (!v->amp && !v->namp && !v->click) v->alive = 0;
     }
-    if (!any) {
+    ext = uac_play_on();
+    if (!any && !ext) {
         cast_dac_reset(&live);
+        cast_dac_reset(&live_r);
         for (i = 0; i < n; i++) out[2u * i] = out[2u * i + 1u] = 0;
-    } else for (i = 0; i < n; i++) {
-        int32_t x = out[2u * i], y, wet;
-        x = sat(x);
-        if (!fx_bypass && wq) {
-            wet = cast_dac_process(&live, x);
-            y = x + (int32_t)(((int64_t)(wet - x) * wq) >> 8);
-        } else y = x;
-        y = (int32_t)(((int64_t)y * lvl) >> 8);
-        y = sat(y);
-        out[2u * i] = y;
-        out[2u * i + 1u] = y;
-        if (y > 40 || y < -40) any = 1;
+    } else if (!ext) {
+        cast_dac_reset(&live_r);
+        for (i = 0; i < n; i++) {
+            int32_t x = sat(out[2u * i]), y, wet;
+            if (!fx_bypass && wq) {
+                wet = cast_dac_process(&live, x);
+                y = x + (int32_t)(((int64_t)(wet - x) * wq) >> 8);
+            } else y = x;
+            y = (int32_t)(((int64_t)y * lvl) >> 8);
+            y = sat(y);
+            out[2u * i] = y;
+            out[2u * i + 1u] = y;
+            if (y > 40 || y < -40) any = 1;
+        }
+    } else {
+        any = 1;
+        for (i = 0; i < n; i++) {
+            int32_t mono = out[2u * i], cl = 0, cr = 0, xl, xr, wl, wr;
+            uac_play_frame(&cl, &cr);
+            xl = sat(mono + cl);
+            xr = sat(mono + cr);
+            if (!fx_bypass && wq) {
+                int32_t wetl = cast_dac_process(&live, xl);
+                int32_t wetr = cast_dac_process(&live_r, xr);
+                wl = xl + (int32_t)(((int64_t)(wetl - xl) * wq) >> 8);
+                wr = xr + (int32_t)(((int64_t)(wetr - xr) * wq) >> 8);
+            } else {
+                wl = xl;
+                wr = xr;
+            }
+            wl = sat((int32_t)(((int64_t)wl * lvl) >> 8));
+            wr = sat((int32_t)(((int64_t)wr * lvl) >> 8));
+            out[2u * i] = wl;
+            out[2u * i + 1u] = wr;
+        }
     }
     sounding = (uint8_t)any;
     (void)clk_len_hold;
@@ -433,20 +532,19 @@ static void app_audio(int32_t *out, uint32_t n) {
 static void bq_coef(CastBq *d, const CastCoef *s) {
     d->b0 = s->b0; d->b1 = s->b1; d->b2 = s->b2; d->a1 = s->a1; d->a2 = s->a2;
 }
-static void fx_apply(int reset_state) {
+static void fx_program(CastDac *dst, int reset_state) {
     uint32_t m, tone, rate, bits, hz, step, i;
-    fm1_irq_off();
     m = set.machine;
     if (m > 5u) m = 5u;
     fx_bypass = (uint8_t)(m >= 5u);
-    live.npre = 0;
-    live.npost = 0;
-    live.dc_block = 0;
-    live.drive_q8 = set.drive ? (int)(256 + (uint32_t)set.drive * 40u) : 0;
+    dst->npre = 0;
+    dst->npost = 0;
+    dst->dc_block = 0;
+    dst->drive_q8 = set.drive ? (int)(256 + (uint32_t)set.drive * 40u) : 0;
     if (m >= 5u) {
-        live.law = CAST_LAW_LINEAR;
-        live.bits = 16;
-        live.step = 65536u;
+        dst->law = CAST_LAW_LINEAR;
+        dst->bits = 16;
+        dst->step = 65536u;
     } else {
         tone = set.tone[m];
         rate = set.rate[m];
@@ -457,53 +555,59 @@ static void fx_apply(int reset_state) {
         hz = CAST_RATE[m][rate];
         step = (hz << 16) / 44100u;
         if (step < 256u) step = 256u;
-        live.step = step;
-        live.bits = (m == 1u) ? 12 : (int)BITV[bits];
+        dst->step = step;
+        dst->bits = (m == 1u) ? 12 : (int)BITV[bits];
         if (m == 0u) {
-            live.law = CAST_LAW_LINEAR;
-            for (i = 0; i < 2u; i++) bq_coef(&live.post[i], &CAST_VS_POST[tone][i]);
-            live.npost = 2;
+            dst->law = CAST_LAW_LINEAR;
+            for (i = 0; i < 2u; i++) bq_coef(&dst->post[i], &CAST_VS_POST[tone][i]);
+            dst->npost = 2;
         } else if (m == 1u) {
-            live.law = CAST_LAW_DX7;
-            live.bits = 12;
+            dst->law = CAST_LAW_DX7;
+            dst->bits = 12;
         } else if (m == 2u) {
-            live.law = CAST_LAW_LINEAR;
-            bq_coef(&live.pre[0], &CAST_SP_PRE[0]);
-            bq_coef(&live.pre[1], &CAST_SP_PRE[1]);
-            live.npre = 2;
-            live.npost = CAST_SP_NPOST[tone];
-            for (i = 0; i < live.npost; i++) bq_coef(&live.post[i], &CAST_SP_POST[tone][i]);
+            dst->law = CAST_LAW_LINEAR;
+            bq_coef(&dst->pre[0], &CAST_SP_PRE[0]);
+            bq_coef(&dst->pre[1], &CAST_SP_PRE[1]);
+            dst->npre = 2;
+            dst->npost = CAST_SP_NPOST[tone];
+            for (i = 0; i < dst->npost; i++) bq_coef(&dst->post[i], &CAST_SP_POST[tone][i]);
         } else if (m == 3u) {
-            live.law = CAST_LAW_DPCM;
-            live.dc_block = 1;
-            bq_coef(&live.pre[0], &CAST_EII_PRE[0]);
-            live.npre = 1;
-            live.npost = 2;
-            for (i = 0; i < 2u; i++) bq_coef(&live.post[i], &CAST_EII_POST[tone][i]);
+            dst->law = CAST_LAW_DPCM;
+            dst->dc_block = 1;
+            bq_coef(&dst->pre[0], &CAST_EII_PRE[0]);
+            dst->npre = 1;
+            dst->npost = 2;
+            for (i = 0; i < 2u; i++) bq_coef(&dst->post[i], &CAST_EII_POST[tone][i]);
         } else {
-            live.law = CAST_LAW_LINEAR;
-            live.npre = 3;
-            live.npost = 3;
+            dst->law = CAST_LAW_LINEAR;
+            dst->npre = 3;
+            dst->npost = 3;
             for (i = 0; i < 3u; i++) {
-                bq_coef(&live.pre[i], &CAST_S950_PRE[rate][i]);
-                bq_coef(&live.post[i], &CAST_S950_POST[rate][i]);
+                bq_coef(&dst->pre[i], &CAST_S950_PRE[rate][i]);
+                bq_coef(&dst->post[i], &CAST_S950_POST[rate][i]);
             }
         }
     }
-    if (reset_state) cast_dac_reset(&live);
+    if (reset_state) cast_dac_reset(dst);
+}
+static void fx_apply(int reset_state) {
+    fm1_irq_off();
+    fx_program(&live, reset_state);
+    fx_program(&live_r, 1);
     audio_ready = 1;
     fm1_irq_on();
     (void)CAST_TONE_MILLI[0];
 }
 
-/* ---- panel text ---- */
 static uint8_t paint_req = 1, hint_req, skip_keys;
 static const char *msg;
 static uint32_t msg_until;
+static char msgbuf[24];
 static char lab[4][20], val[4][12];
 static int barv[4], barlo[4], barhi[4];
 static uint8_t white_ord[27], black_ord[27], white_at[16];
 static uint8_t nwhite, nblack;
+static uint8_t cursor;
 
 static void message(const char *s) {
     msg = s;
@@ -511,6 +615,22 @@ static void message(const char *s) {
     hint_req = 1;
 }
 static int msg_on(void) { return msg && (int32_t)(fm1_ms - msg_until) < 0; }
+static void message_take(uint32_t bpm) {
+    uint32_t n = put_str(msgbuf, 24, 0, "TAKE ");
+    n = put_u_at(msgbuf, 24, n, bpm);
+    put_str(msgbuf, 24, n, " BPM");
+    message(msgbuf);
+}
+static void message_step(uint32_t step, uint32_t note) {
+    char nm[12];
+    uint32_t n;
+    note_text(nm, note);
+    n = put_str(msgbuf, 24, 0, "STEP ");
+    n = put_u_at(msgbuf, 24, n, step);
+    n = put_str(msgbuf, 24, n, " ");
+    put_str(msgbuf, 24, n, nm);
+    message(msgbuf);
+}
 
 static void row_set(uint32_t i, const char *k, const char *name, const char *value, int v, int lo, int hi) {
     uint32_t n = put_str(lab[i], 20, 0, k);
@@ -522,20 +642,26 @@ static void row_set(uint32_t i, const char *k, const char *name, const char *val
     barhi[i] = hi;
 }
 static uint32_t bar_fill(int v, int lo, int hi, uint32_t w) {
+    uint32_t fill;
     if (hi <= lo) return 0;
     if (v < lo) v = lo;
     if (v > hi) v = hi;
-    uint32_t fill = (uint32_t)(v - lo) * w / (uint32_t)(hi - lo);
+    fill = (uint32_t)(v - lo) * w / (uint32_t)(hi - lo);
     if (fill < 6u && w >= 6u) fill = 6u;
     return fill;
 }
 static void num(char *d, uint32_t v) { put_u(d, 12, v); }
+static void ch_text(char *d, uint32_t ch) {
+    uint32_t n;
+    if (!ch) { put_str(d, 12, 0, "OMNI"); return; }
+    n = put_str(d, 12, 0, "CH ");
+    put_u(d + n, 12u - n, ch);
+}
 
 static void fill_rows(void) {
     char n0[12], n1[12], n2[12], n3[12];
-    uint32_t m = set.machine, tr = set.track;
+    uint32_t m = set.machine, tr = trk();
     if (m > 5u) m = 5u;
-    if (tr > 3u) tr = 0;
     if (page == PG_FX && !fx_alt) {
         row_set(0, "K1", "MACHINE", MACH[m], (int)m, 0, 5);
         if (m == 5u) {
@@ -576,8 +702,30 @@ static void fill_rows(void) {
             char k[3] = {'K', (char)('1' + i), 0};
             num(n0, set.mix[i]);
             row_set(i, k, TRK[i], n0, (int)set.mix[i], 0, 100);
-            put_u(n0, 12, 0);
         }
+    } else if (page == PG_EDIT && edit_alt) {
+        uint32_t i;
+        for (i = 0; i < 4u; i++) {
+            char k[3] = {'K', (char)('1' + i), 0};
+            if (tr >= 4u) {
+                ch_text(n0, set.mch[i]);
+                row_set(i, k, TRK[4u + i], n0, (int)set.mch[i], 1, 16);
+            } else {
+                note_text(n0, set.gm[i]);
+                row_set(i, k, TRK[i], n0, (int)set.gm[i], 0, 127);
+            }
+        }
+    } else if (page == PG_EDIT && tr >= 4u) {
+        uint32_t mt = tr - 4u, len = set.length < 1u ? 1u : set.length;
+        uint32_t st = cursor >= len ? 0u : cursor;
+        ch_text(n0, set.mch[mt]);
+        note_text(n1, set.mnote[mt]);
+        note_text(n2, set.pat[set.pattern][tr][st]);
+        num(n3, set.pvel[set.pattern][mt][st]);
+        row_set(0, "K1", "CHANNEL", n0, (int)set.mch[mt], 1, 16);
+        row_set(1, "K2", "BASE", n1, (int)set.mnote[mt], 1, 127);
+        row_set(2, "K3", "NOTE", n2, (int)set.pat[set.pattern][tr][st], 0, 127);
+        row_set(3, "K4", "VELOCITY", n3, (int)set.pvel[set.pattern][mt][st], 0, 127);
     } else if (page == PG_EDIT) {
         static const char *NM[4] = {"TUNE", "DECAY", "SNAP", "DROP"};
         uint32_t i;
@@ -587,11 +735,11 @@ static void fill_rows(void) {
             row_set(i, k, NM[i], n0, (int)set.drum[tr][i], 0, 100);
         }
     } else if (page == PG_ARP) {
-        uint32_t mode = set.arp_mode > 4u ? 0u : set.arp_mode;
+        uint32_t mode = set.arp_mode > 6u ? 0u : set.arp_mode;
         uint32_t div = set.arp_div > 3u ? 2u : set.arp_div;
         num(n2, set.arp_gate);
         num(n3, set.arp_oct);
-        row_set(0, "K1", "MODE", MODE[mode], (int)mode, 0, 4);
+        row_set(0, "K1", "MODE", MODE[mode], (int)mode, 0, 6);
         row_set(1, "K2", "RATE", DIVN[div], (int)div, 0, 3);
         row_set(2, "K3", "GATE", n2, (int)set.arp_gate, 10, 100);
         row_set(3, "K4", "OCTAVE", n3, (int)set.arp_oct, 1, 3);
@@ -604,6 +752,13 @@ static void fill_rows(void) {
         row_set(1, "K2", "DEPTH", n1, (int)set.lfo_depth, 0, 100);
         row_set(2, "K3", "CC", n2, (int)set.lfo_cc, 1, 127);
         row_set(3, "K4", "DEST", DEST[dest], (int)dest, 0, 2);
+    } else if (page == PG_ENV && env_alt) {
+        num(n1, set.env_cc);
+        num(n2, set.env_amt);
+        row_set(0, "K1", "SEND", set.env_on ? "ON" : "OFF", (int)set.env_on, 0, 1);
+        row_set(1, "K2", "CC", n1, (int)set.env_cc, 1, 127);
+        row_set(2, "K3", "AMOUNT", n2, (int)set.env_amt, 0, 100);
+        row_set(3, "K4", "TRIG", "NOTE", 1, 0, 1);
     } else if (page == PG_ENV) {
         static const char *NM[4] = {"ATTACK", "DECAY", "SUSTAIN", "RELEASE"};
         uint8_t envv[4];
@@ -615,35 +770,61 @@ static void fill_rows(void) {
             row_set(i, k, NM[i], n0, (int)envv[i], 0, 100);
         }
     } else {
-        char ch[12];
         num(n0, set.tempo);
         num(n1, set.swing);
         num(n2, set.length);
-        if (!set.ch) put_str(ch, 12, 0, "OMNI");
-        else { uint32_t n = put_str(ch, 12, 0, "CH "); put_u(ch + n, 12 - n, set.ch); }
+        ch_text(n3, set.ch);
         row_set(0, "K1", "TEMPO", n0, (int)set.tempo, 40, 240);
         row_set(1, "K2", "SWING", n1, (int)set.swing, 50, 75);
         row_set(2, "K3", "LENGTH", n2, (int)set.length, 1, 16);
-        row_set(3, "K4", "CHANNEL", ch, (int)set.ch, 0, 16);
+        row_set(3, "K4", "CHANNEL", n3, (int)set.ch, 0, 16);
     }
 }
 
-static uint8_t cursor;
-
 static void fill_seq(void) {
     char n0[12], n1[12], n2[12];
-    uint32_t len = set.length, vel = 0;
+    uint32_t len = set.length, tr = trk(), vel;
     if (len < 1u) len = 1u;
     if (len > 16u) len = 16u;
     if (cursor >= len) cursor = (uint8_t)(len - 1u);
-    vel = set.pat[set.pattern][set.track][cursor];
+    if (seq_view == VW_SONG) {
+        uint32_t sl = set.song_len < 1u ? 1u : set.song_len;
+        uint32_t slot, patn;
+        if (sl > 16u) sl = 16u;
+        if (song_slot >= sl) song_slot = (uint8_t)(sl - 1u);
+        slot = song_slot;
+        patn = set.song[slot];
+        if (patn > 7u) patn = 0;
+        num(n0, slot + 1u);
+        num(n1, patn + 1u);
+        num(n2, sl);
+        row_set(0, "K1", "SLOT", n0, (int)slot, 0, (int)sl - 1);
+        row_set(1, "K2", "PATTERN", n1, (int)patn, 0, 7);
+        row_set(2, "K3", "LENGTH", n2, (int)sl, 1, 16);
+        row_set(3, "K4", "TRACK", TRK[tr], (int)tr, 0, 7);
+        return;
+    }
+    if (tr >= 4u) {
+        note_text(n1, set.pat[set.pattern][tr][cursor]);
+        num(n0, (uint32_t)cursor + 1u);
+        num(n2, len);
+        row_set(0, "K1", "STEP", n0, (int)cursor, 0, (int)len - 1);
+        row_set(1, "K2", "NOTE", n1, (int)set.pat[set.pattern][tr][cursor], 0, 127);
+        if (seq_view == VW_PIANO) {
+            num(n2, set.pvel[set.pattern][tr - 4u][cursor]);
+            row_set(2, "K3", "VELOCITY", n2, (int)set.pvel[set.pattern][tr - 4u][cursor], 1, 127);
+        } else row_set(2, "K3", "LENGTH", n2, (int)len, 1, 16);
+        row_set(3, "K4", "TRACK", TRK[tr], (int)tr, 0, 7);
+        return;
+    }
+    vel = set.pat[set.pattern][tr][cursor];
     num(n0, (uint32_t)cursor + 1u);
     num(n1, vel);
     num(n2, len);
     row_set(0, "K1", "STEP", n0, (int)cursor, 0, (int)len - 1);
     row_set(1, "K2", "VELOCITY", n1, (int)vel, 0, 127);
     row_set(2, "K3", "LENGTH", n2, (int)len, 1, 16);
-    row_set(3, "K4", "TRACK", TRK[set.track > 3u ? 0u : set.track], (int)set.track, 0, 3);
+    row_set(3, "K4", "TRACK", TRK[tr], (int)tr, 0, 7);
 }
 
 static void draw_big(uint32_t i, uint32_t y) {
@@ -667,17 +848,20 @@ static void draw_small(uint32_t i, uint32_t y) {
     cv_blit(0, y);
 }
 static void draw_grid(void) {
-    uint32_t i, x = 0, len = set.length, tr = set.track, pat = set.pattern;
+    uint32_t i, x = 0, len = set.length, tr = trk(), pat = set.pattern;
     if (len < 1u) len = 1u;
     if (len > 16u) len = 16u;
-    if (tr > 3u) tr = 0;
     if (pat > 7u) pat = 0;
     cv_begin(240, 48, C_BLACK);
     for (i = 0; i < 16u; i++) {
         uint32_t vel = 0, h = 0;
         uint16_t col = C_DIM;
         if (i < len) {
-            vel = set.pat[pat][tr][i];
+            if (tr >= 4u) {
+                uint32_t note = set.pat[pat][tr][i];
+                vel = note ? set.pvel[pat][tr - 4u][i] : 0;
+                if (note && !vel) vel = 100;
+            } else vel = set.pat[pat][tr][i];
             if (seq_run && i == seq_pos) col = C_WHITE;
             else if (vel) col = C_HI;
             h = vel * 30u / 127u;
@@ -690,71 +874,121 @@ static void draw_grid(void) {
     }
     cv_blit(0, 16);
 }
+static void draw_song(void) {
+    uint32_t i, x = 0, sl = set.song_len;
+    if (sl < 1u) sl = 1u;
+    if (sl > 16u) sl = 16u;
+    cv_begin(240, 48, C_BLACK);
+    for (i = 0; i < 16u; i++) {
+        uint32_t h = 0, p = 0;
+        uint16_t col = C_DIM;
+        if (i < sl) {
+            p = set.song[i];
+            if (p > 7u) p = 0;
+            h = 8u + p * 3u;
+            if (seq_run && i == song_i) col = C_WHITE;
+            else if (i == song_slot) col = C_HI;
+            else col = C_AMB;
+        }
+        cv_rect((int32_t)x, 4, 12, 30, C_LINE);
+        if (h) cv_rect((int32_t)x, 4 + (int32_t)(30u - h), 12, (int32_t)h, col);
+        if (i == song_slot) cv_rect((int32_t)x, 40, 12, 4, C_WHITE);
+        x += 15u;
+    }
+    cv_blit(0, 16);
+}
 static void header_text(char *d) {
     const char *name = "FX";
-    uint32_t n, tr = set.track > 3u ? 0u : set.track;
+    uint32_t n, tr = trk();
     if (page == PG_FX && fx_alt) name = "WET";
     else if (page == PG_HOME) name = "HOME";
-    else if (page == PG_SEQ) name = "SEQ";
+    else if (page == PG_SEQ && seq_view == VW_PIANO) name = "PIANO";
+    else if (page == PG_SEQ && seq_view == VW_SONG) name = "SONG";
+    else if (page == PG_SEQ) name = "GRID";
+    else if (page == PG_EDIT && edit_alt) name = "NOTE";
     else if (page == PG_EDIT) name = "EDIT";
     else if (page == PG_ARP) name = "ARP";
     else if (page == PG_LFO) name = "LFO";
+    else if (page == PG_ENV && env_alt) name = "CC";
     else if (page == PG_ENV) name = "ENV";
     else if (page == PG_GLO) name = "GLO";
     n = put_str(d, 40, 0, " ");
     n = put_str(d, 40, n, name);
-    n = put_str(d, 40, n, "  TRACK ");
+    if (page == PG_HOME) {
+        n = put_str(d, 40, n, " ");
+        n = put_str(d, 40, n, ENG[engi()]);
+    }
+    n = put_str(d, 40, n, "  ");
     n = put_str(d, 40, n, TRK[tr]);
     n = put_str(d, 40, n, "  v");
     put_str(d, 40, n, APP_VER);
 }
 static void status_text(char *d) {
-    uint32_t n, tr = set.track > 3u ? 0u : set.track;
+    uint32_t n, tr = trk();
     n = put_str(d, 40, 0, " ");
     n = put_str(d, 40, n, TRK[tr]);
     n = put_str(d, 40, n, seq_run ? " PLAY " : " ");
     n = put_u_at(d, 40, n, set.tempo);
-    n = put_str(d, 40, n, "  PAT ");
-    n = put_u_at(d, 40, n, (uint32_t)set.pattern + 1u);
+    if (seq_run && set.song_len > 1u) {
+        n = put_str(d, 40, n, " SNG ");
+        n = put_u_at(d, 40, n, (uint32_t)song_i + 1u);
+    } else {
+        n = put_str(d, 40, n, " PAT ");
+        n = put_u_at(d, 40, n, (uint32_t)set.pattern + 1u);
+    }
     if (seq_run) {
-        n = put_str(d, 40, n, "  S");
+        n = put_str(d, 40, n, " S");
         put_u_at(d, 40, n, (uint32_t)seq_pos + 1u);
     }
 }
 static const char *hint_text(void) {
     if (msg_on()) return msg;
     if (page == PG_FX && fx_alt) return " PRESS FX FOR THE LAW";
-    if (page == PG_FX && set.machine == 4u) return " SELECT = TRACK";
-    if (page == PG_FX && set.machine == 5u) return " SELECT = TRACK";
-    if (page == PG_FX) return " SELECT = TRACK";
-    if (page == PG_HOME) return " SELECT = TRACK";
-    if (page == PG_SEQ && rec) return " REC WRITES THIS TRACK";
+    if (page == PG_FX) return " USB IN GOES TO PHONES";
+    if (page == PG_HOME) return ENGNXT[engi()];
+    if (page == PG_SEQ && rec && seq_run) return " REC WRITES THE STEP";
+    if (page == PG_SEQ && seq_view == VW_PIANO && trk() < 4u) return " SELECT A MIDI TRACK";
+    if (page == PG_SEQ && seq_view == VW_PIANO) return " KEYS WRITE A STEP";
+    if (page == PG_SEQ && seq_view == VW_SONG) return " PLAY WALKS THE CHAIN";
     if (page == PG_SEQ) return " K4 OR SELECT = TRACK";
-    if (page == PG_EDIT) return " SELECT = THIS DRUM";
-    if (page == PG_ARP) return " HOLD KEYS TO RUN IT";
+    if (page == PG_EDIT && edit_alt && trk() >= 4u) return " MIDI CHANNEL";
+    if (page == PG_EDIT && edit_alt) return " GM NOTE OF EACH DRUM";
+    if (page == PG_EDIT) return " PRESS EDIT FOR NOTES";
+    if (page == PG_ARP && set.arp_latch) return " LATCH HOLDS THE KEYS";
+    if (page == PG_ARP) return " PRESS ARP TO LATCH";
     if (page == PG_LFO) return " DEPTH IS AUDIBLE";
-    if (page == PG_ENV) return " THE KEYS USE THIS";
+    if (page == PG_ENV && env_alt) return " CC ON EACH NOTE";
+    if (page == PG_ENV) return " PRESS ENV FOR CC";
     return " OCT+ TWICE CLEARS";
 }
 
-static uint32_t stamp, stamp_drawn;
+static uint32_t stamp;
 static void paint(int full) {
     char line[40];
     uint32_t i;
     idle_ok = 1;
     if (page == PG_SEQ) fill_seq();
     else fill_rows();
+    header_text(line);
+#ifdef DINGHY_HOST
+    {
+        char stat[40];
+        status_text(stat);
+        printf("%6u ms  UI [%s] [%s] [%s]\n", fm1_ms, line, stat, hint_text());
+    }
+#endif
     if (full) {
-        header_text(line);
         draw_text_box(0, 0, 240, &FONT_S, line, C_HI, 0);
         if (page == PG_SEQ) {
-            draw_grid();
+            if (seq_view == VW_SONG) draw_song();
+            else draw_grid();
             for (i = 0; i < 4u; i++) draw_small(i, 64u + i * 36u);
         } else {
             for (i = 0; i < 4u; i++) draw_big(i, 16u + i * 48u);
         }
     } else if (page == PG_SEQ) {
-        draw_grid();
+        if (seq_view == VW_SONG) draw_song();
+        else draw_grid();
     }
     status_text(line);
     draw_text_box(0, 208, 240, &FONT_S, line, C_AMB, 0);
@@ -763,7 +997,6 @@ static void paint(int full) {
     hint_req = 0;
 }
 
-/* ---- MIDI out queue (the screen wait must not call midi_send) ---- */
 static uint8_t oq[32][3], oq_w, oq_r;
 static void midi_out(uint32_t st, uint32_t d1, uint32_t d2) {
     uint8_t n = (uint8_t)((oq_w + 1u) & 31u);
@@ -801,27 +1034,214 @@ static void offs_flush(void) {
         }
 }
 static uint32_t out_ch(void) { return set.ch ? (uint32_t)set.ch - 1u : 0u; }
+static uint32_t midi_ch(uint32_t tr) {
+    uint32_t ch;
+    if (tr >= 4u) tr = 0;
+    ch = set.mch[tr];
+    if (ch < 1u || ch > 16u) ch = 1u;
+    return ch - 1u;
+}
+
+static uint8_t menv_st;
+static int32_t menv;
+static int16_t menv_sent = -1;
+static uint32_t menv_ms, menv_until;
+static void menv_release(void) {
+    if (!down_count && menv_st && menv_st < 4u) menv_st = 4u;
+}
+static void menv_trig(int held) {
+    if (!set.env_on) return;
+    menv_st = 1u;
+    menv_until = fm1_ms + (held ? 60000u : 180u);
+}
+static void menv_tick(void) {
+    uint32_t dt, cc, amt;
+    int32_t step, sus;
+    if (!set.env_on) {
+        if (menv_sent >= 0) {
+            midi_out(0xB0u | out_ch(), set.env_cc ? set.env_cc : 11u, 0);
+            menv_sent = -1;
+        }
+        menv_st = 0;
+        menv = 0;
+        return;
+    }
+    dt = fm1_ms - menv_ms;
+    menv_ms = fm1_ms;
+    if (dt > 40u) dt = 40u;
+    if (menv_st && menv_st < 4u && !down_count && (int32_t)(fm1_ms - menv_until) >= 0)
+        menv_st = 4u;
+    sus = set.sus > 100u ? 100 : (int32_t)set.sus;
+    if (menv_st == 1u && dt) {
+        step = 1 + (int)(100u - (set.atk > 100u ? 100u : set.atk)) / 4;
+        menv += step * (int32_t)dt;
+        if (menv >= 100) { menv = 100; menv_st = 2u; }
+    } else if (menv_st == 2u && dt) {
+        if (menv > sus) {
+            menv -= (int32_t)dt;
+            if (menv < sus) menv = sus;
+        } else menv_st = 3u;
+    } else if (menv_st == 3u) menv = sus;
+    else if (menv_st == 4u && dt) {
+        menv -= (int32_t)dt;
+        if (menv <= 0) { menv = 0; menv_st = 0; }
+    }
+    amt = set.env_amt > 100u ? 100u : set.env_amt;
+    cc = (uint32_t)(menv * (int32_t)amt / 100);
+    if (cc > 127u) cc = 127u;
+    if ((int32_t)cc != menv_sent) {
+        uint32_t prev = menv_sent < 0 ? 255u : (uint32_t)menv_sent;
+        uint32_t diff = cc > prev ? cc - prev : prev - cc;
+        /* The screen redraw can stall the main loop, and the MIDI queue is short. */
+        if (diff < 4u && cc != 0u) return;
+        midi_out(0xB0u | out_ch(), set.env_cc ? set.env_cc : 11u, cc);
+        menv_sent = (int16_t)cc;
+    }
+}
+
+#define NTAKE 48u
+typedef struct { uint16_t dt; uint8_t note, vel; } TakeEv;
+static TakeEv takeq[NTAKE];
+static uint8_t take_n, take_w;
+static uint32_t take_last, take_span;
+
+static void take_push(uint32_t note, uint32_t vel) {
+    uint32_t now, dt = 0;
+    if (!note || !vel) return;
+    if (vel > 127u) vel = 127u;
+    if (note > 255u) return;
+    now = fm1_ms;
+    if (take_n) {
+        dt = now - take_last;
+        if (dt > 2000u) dt = 2000u;
+        while (take_n && take_span + dt > 8000u) {
+            uint32_t old = (take_w + NTAKE - take_n) % NTAKE;
+            uint32_t next;
+            if (take_span >= takeq[old].dt) take_span -= takeq[old].dt;
+            else take_span = 0;
+            take_n--;
+            if (!take_n) break;
+            next = (old + 1u) % NTAKE;
+            if (take_span >= takeq[next].dt) take_span -= takeq[next].dt;
+            else take_span = 0;
+            takeq[next].dt = 0;
+        }
+    }
+    takeq[take_w].dt = (uint16_t)dt;
+    takeq[take_w].note = (uint8_t)note;
+    takeq[take_w].vel = (uint8_t)vel;
+    take_w = (uint8_t)((take_w + 1u) % NTAKE);
+    if (take_n < NTAKE) take_n++;
+    take_span += dt;
+    take_last = now;
+}
+
+static int drum_ix(uint32_t note) {
+    uint32_t i;
+    for (i = 0; i < 4u; i++) if (set.gm[i] == note) return (int)i;
+    if (note == 35u || note == 36u) return 0;
+    if (note == 38u || note == 40u) return 1;
+    if (note == 42u || note == 44u || note == 46u) return 2;
+    if (note == 41u || note == 43u || note == 45u || note == 47u || note == 48u || note == 50u) return 3;
+    return -1;
+}
 
 static void request_drum(uint32_t d, uint32_t vel, int record) {
     if (d > 3u || !vel) return;
     if (vel > 127u) vel = 127u;
     trig_v[d] = (uint8_t)vel;
     trig_n[d]++;
-    midi_out(0x99u, GM[d], vel);
-    note_off_later(9u, GM[d], 70u);
+    midi_out(0x99u, set.gm[d], vel);
+    note_off_later(9u, set.gm[d], 70u);
+    take_push(128u + d, vel);
+    menv_trig(0);
     if (record && rec && seq_run) {
         uint8_t s = seq_pos, len = set.length;
         if (len < 1u) len = 1u;
         if (s < len) {
             set.pat[set.pattern][d][s] = (uint8_t)vel;
-            save_req = 0;
             paint_req = 1;
         }
     }
 }
 
-/* ---- arp ---- */
-static uint8_t held[16], nheld, arp_idx, arp_oct_i, arp_dir = 1, arp_on, arp_note;
+static uint32_t take_bpm(void) {
+    uint16_t iv[NTAKE];
+    uint32_t n = 0, i, j, med, bpm = 0, best = 0, oldest;
+    if (take_n < 2u) return 0;
+    oldest = (take_w + NTAKE - take_n) % NTAKE;
+    for (i = 1; i < take_n; i++) {
+        uint16_t dt = takeq[(oldest + i) % NTAKE].dt;
+        if (dt >= 40u && dt <= 2000u) iv[n++] = dt;
+    }
+    if (!n) return 0;
+    for (i = 1; i < n; i++) {
+        uint16_t x = iv[i];
+        j = i;
+        while (j && iv[j - 1u] > x) { iv[j] = iv[j - 1u]; j--; }
+        iv[j] = x;
+    }
+    med = iv[n / 2u];
+    if (!med) return 0;
+    for (i = 1; i <= 4u; i <<= 1) {
+        uint32_t b, score;
+        if (med * i == 0 || med * i > 60000u) continue;
+        b = 60000u / (med * i);
+        if (b < 40u || b > 240u) continue;
+        score = (b >= 70u && b <= 180u) ? 2u : 1u;
+        if (score > best) { best = score; bpm = b; }
+    }
+    return bpm;
+}
+static void take_commit(void) {
+    uint32_t bpm, i, t, step_ms, len, pat, dest, oldest, mask = 0, melodic = 0;
+    bpm = take_bpm();
+    if (!bpm) { message("NO TAKE"); return; }
+    len = set.length < 1u ? 1u : set.length;
+    if (len > 16u) len = 16u;
+    pat = set.pattern > 7u ? 0u : set.pattern;
+    dest = trk() >= 4u ? trk() : 4u;
+    oldest = (take_w + NTAKE - take_n) % NTAKE;
+    for (i = 0; i < take_n; i++) {
+        uint8_t note = takeq[(oldest + i) % NTAKE].note;
+        if (note >= 128u && note < 132u) mask |= 1u << (note - 128u);
+        else if (note) melodic = 1u;
+    }
+    for (i = 0; i < 4u; i++) if (mask & (1u << i)) {
+        uint32_t s;
+        for (s = 0; s < 16u; s++) set.pat[pat][i][s] = 0;
+    }
+    if (melodic) {
+        uint32_t s;
+        for (s = 0; s < 16u; s++) {
+            set.pat[pat][dest][s] = 0;
+            set.pvel[pat][dest - 4u][s] = 0;
+        }
+    }
+    step_ms = 15000u / bpm;
+    if (step_ms < 1u) step_ms = 1u;
+    t = 0;
+    for (i = 0; i < take_n; i++) {
+        TakeEv *e = &takeq[(oldest + i) % NTAKE];
+        uint32_t step;
+        t += e->dt;
+        step = (t + step_ms / 2u) / step_ms % len;
+        if (e->note >= 128u && e->note < 132u)
+            set.pat[pat][(uint32_t)e->note - 128u][step] = e->vel ? e->vel : 100u;
+        else if (melodic && e->note && e->note < 128u) {
+            set.pat[pat][dest][step] = e->note;
+            set.pvel[pat][dest - 4u][step] = e->vel ? e->vel : 100u;
+        }
+    }
+    set.tempo = (uint8_t)bpm;
+    dirty = 1;
+    t_change = fm1_ms;
+    paint_req = 1;
+    message_take(bpm);
+}
+
+static uint8_t held[16], nheld, played[16], nplayed;
+static uint8_t arp_idx, arp_oct_i, arp_dir = 1, arp_on, arp_notes[8], arp_nn;
 static uint32_t arp_next, arp_off;
 static void held_add(uint8_t note) {
     uint32_t i;
@@ -840,14 +1260,44 @@ static void held_del(uint8_t note) {
         return;
     }
 }
+static void played_add(uint8_t note) {
+    uint32_t i;
+    for (i = 0; i < nplayed; i++) if (played[i] == note) return;
+    if (nplayed < 16u) played[nplayed++] = note;
+}
+static void played_del(uint8_t note) {
+    uint32_t i, j;
+    for (i = 0; i < nplayed; i++) if (played[i] == note) {
+        for (j = i + 1u; j < nplayed; j++) played[j - 1u] = played[j];
+        nplayed--;
+        return;
+    }
+}
+static void note_hold(uint8_t note) { held_add(note); played_add(note); }
+static void note_drop(uint8_t note) {
+    if (set.arp_latch) return;
+    held_del(note);
+    played_del(note);
+}
 static void arp_stop(void) {
-    if (!arp_on) return;
-    tone_stop(arp_note);
-    midi_out(0x80u | out_ch(), arp_note, 0);
+    uint32_t i;
+    for (i = 0; i < arp_nn; i++) {
+        tone_stop(arp_notes[i]);
+        midi_out(0x80u | out_ch(), arp_notes[i], 0);
+    }
+    arp_nn = 0;
     arp_on = 0;
 }
+static void arp_fire(uint32_t note) {
+    if (note > 127u || arp_nn >= 8u) return;
+    tone_start(note, 108u);
+    midi_out(0x90u | out_ch(), note, 108u);
+    arp_notes[arp_nn++] = (uint8_t)note;
+    arp_on = 1;
+}
 static void arp_run(void) {
-    uint32_t bpm, quarter, iv, mode, gate, note, octs;
+    uint32_t bpm, quarter, iv, mode, gate, note, octs, nsrc;
+    uint8_t *src;
     if (!set.arp_mode || page == PG_SEQ || page == PG_EDIT || !nheld) {
         arp_stop();
         return;
@@ -859,41 +1309,47 @@ static void arp_run(void) {
     if (arp_on && (int32_t)(fm1_ms - arp_off) >= 0) arp_stop();
     if ((int32_t)(fm1_ms - arp_next) < 0) return;
     arp_next = fm1_ms + iv;
-    mode = set.arp_mode;
+    mode = set.arp_mode > 6u ? 0u : set.arp_mode;
     octs = set.arp_oct < 1u ? 1u : set.arp_oct;
     if (octs > 3u) octs = 3u;
+    gate = set.arp_gate < 10u ? 10u : set.arp_gate;
+    if (gate > 100u) gate = 100u;
+    if (mode == 5u) {
+        uint32_t i, o;
+        arp_stop();
+        for (o = 0; o < octs; o++)
+            for (i = 0; i < nheld && arp_nn < 4u; i++)
+                arp_fire((uint32_t)held[i] + 12u * o);
+        arp_off = fm1_ms + iv * gate / 100u;
+        return;
+    }
+    src = mode == 6u ? played : held;
+    nsrc = mode == 6u ? nplayed : nheld;
+    if (!nsrc) { arp_stop(); return; }
     if (mode == 4u) {
         lcg = lcg * 1664525u + 1013904223u;
-        arp_idx = (uint8_t)((lcg >> 16) % nheld);
+        arp_idx = (uint8_t)((lcg >> 16) % nsrc);
         arp_oct_i = (uint8_t)((lcg >> 8) % octs);
     } else if (mode == 2u) {
-        if (!arp_idx) { arp_idx = (uint8_t)(nheld - 1u); arp_oct_i = (uint8_t)((arp_oct_i + octs - 1u) % octs); }
+        if (!arp_idx) { arp_idx = (uint8_t)(nsrc - 1u); arp_oct_i = (uint8_t)((arp_oct_i + octs - 1u) % octs); }
         else arp_idx--;
     } else if (mode == 3u) {
         if (arp_dir) {
-            if (arp_idx + 1u >= nheld) arp_dir = 0;
+            if (arp_idx + 1u >= nsrc) arp_dir = 0;
             else arp_idx++;
         } else if (!arp_idx) { arp_dir = 1; arp_oct_i = (uint8_t)((arp_oct_i + 1u) % octs); }
         else arp_idx--;
     } else {
         arp_idx++;
-        if (arp_idx >= nheld) { arp_idx = 0; arp_oct_i = (uint8_t)((arp_oct_i + 1u) % octs); }
+        if (arp_idx >= nsrc) { arp_idx = 0; arp_oct_i = (uint8_t)((arp_oct_i + 1u) % octs); }
     }
-    if (arp_idx >= nheld) arp_idx = 0;
-    note = (uint32_t)held[arp_idx] + 12u * arp_oct_i;
-    if (note > 127u) note = 127u;
+    if (arp_idx >= nsrc) arp_idx = 0;
+    note = (uint32_t)src[arp_idx] + 12u * arp_oct_i;
     arp_stop();
-    tone_start(note, 108u);
-    midi_out(0x90u | out_ch(), note, 108u);
-    arp_note = (uint8_t)note;
-    arp_on = 1;
-    gate = set.arp_gate < 10u ? 10u : set.arp_gate;
-    if (gate > 100u) gate = 100u;
+    arp_fire(note);
     arp_off = fm1_ms + iv * gate / 100u;
 }
 
-/* ---- settings ---- */
-static uint32_t t_change, dirty;
 static void set_zero(void) {
     volatile uint8_t *p = (volatile uint8_t *)&set;
     uint32_t i;
@@ -901,9 +1357,11 @@ static void set_zero(void) {
 }
 static void pat_put(uint32_t p, uint32_t d, uint32_t s, uint32_t v) { set.pat[p][d][s] = (uint8_t)v; }
 static void defaults(void) {
-    static const uint8_t K0[16] = {120,0,0,0, 100,0,0,0, 120,0,0,0, 100,0,0,0};
-    static const uint8_t S0[16] = {0,0,0,0, 110,0,0,0, 0,0,0,0, 110,0,40,0};
-    static const uint8_t H0[16] = {80,0,48,0, 80,0,48,0, 80,0,48,0, 80,0,48,0};
+    static const uint8_t K0[16] = {120, 0, 0, 0, 100, 0, 0, 0, 120, 0, 0, 0, 100, 0, 0, 0};
+    static const uint8_t S0[16] = {0, 0, 0, 0, 110, 0, 0, 0, 0, 0, 0, 0, 110, 0, 40, 0};
+    static const uint8_t H0[16] = {80, 0, 48, 0, 80, 0, 48, 0, 80, 0, 48, 0, 80, 0, 48, 0};
+    static const uint8_t GM0[4] = {36, 38, 42, 45};
+    static const uint8_t MN0[4] = {60, 64, 67, 72};
     uint32_t i, m;
     set_zero();
     set.ver = SET_VER;
@@ -911,6 +1369,11 @@ static void defaults(void) {
     set.swing = 50;
     set.length = 16;
     set.machine = 2;
+    set.engine = 0;
+    set.song_len = 1;
+    set.song[1] = 1;
+    set.song[2] = 2;
+    set.song[3] = 3;
     for (m = 0; m < 6u; m++) {
         set.bits[m] = (m == 3u) ? 0u : 2u;
         set.rate[m] = (m == 2u || m == 3u) ? 3u : (m == 4u ? 2u : 0u);
@@ -925,6 +1388,8 @@ static void defaults(void) {
     set.atk = 2; set.dec = 28; set.sus = 100; set.rel = 24;
     set.arp_div = 2; set.arp_gate = 55; set.arp_oct = 1;
     set.lfo_rate = 36; set.lfo_cc = 1; set.lfo_dest = 2;
+    set.env_cc = 11; set.env_amt = 100;
+    for (i = 0; i < 4u; i++) { set.gm[i] = GM0[i]; set.mnote[i] = MN0[i]; set.mch[i] = 1; }
     for (i = 0; i < 16u; i++) {
         pat_put(0, 0, i, K0[i]); pat_put(0, 1, i, S0[i]); pat_put(0, 2, i, H0[i]);
         if ((i & 3u) == 0u) { pat_put(1, 0, i, 110); pat_put(1, 2, i, 90); }
@@ -941,14 +1406,18 @@ static void defaults(void) {
 }
 static void clamp_set(void) {
     uint32_t i, m;
+    static const uint8_t GM0[4] = {36, 38, 42, 45};
+    static const uint8_t MN0[4] = {60, 64, 67, 72};
     if (set.oct < -2 || set.oct > 2) set.oct = 0;
     if (set.ch > 16u) set.ch = 0;
     if (set.tempo < 40u || set.tempo > 240u) set.tempo = 120;
     if (set.swing < 50u || set.swing > 75u) set.swing = 50;
     if (set.length < 1u || set.length > 16u) set.length = 16;
     if (set.pattern > 7u) set.pattern = 0;
-    if (set.track > 3u) set.track = 0;
+    if (set.track > 7u) set.track = 0;
     if (set.machine > 5u) set.machine = 2;
+    if (set.engine > 3u) set.engine = 0;
+    if (set.song_len < 1u || set.song_len > 16u) set.song_len = 1;
     for (m = 0; m < 6u; m++) {
         if (set.bits[m] > 4u) set.bits[m] = 2;
         if (set.rate[m] > 4u) set.rate[m] = 0;
@@ -960,12 +1429,17 @@ static void clamp_set(void) {
         uint32_t k;
         if (set.mix[i] > 100u) set.mix[i] = 80;
         for (k = 0; k < 4u; k++) if (set.drum[i][k] > 100u) set.drum[i][k] = 40;
+        if (set.gm[i] > 127u) set.gm[i] = GM0[i];
+        if (set.mnote[i] < 1u || set.mnote[i] > 127u) set.mnote[i] = MN0[i];
+        if (set.mch[i] < 1u || set.mch[i] > 16u) set.mch[i] = 1;
     }
+    for (i = 0; i < 16u; i++) if (set.song[i] > 7u) set.song[i] = 0;
     if (set.atk > 100u) set.atk = 2;
     if (set.dec > 100u) set.dec = 28;
     if (set.sus > 100u) set.sus = 100;
     if (set.rel > 100u) set.rel = 24;
-    if (set.arp_mode > 4u) set.arp_mode = 0;
+    if (set.arp_mode > 6u) set.arp_mode = 0;
+    if (set.arp_latch > 1u) set.arp_latch = 0;
     if (set.arp_div > 3u) set.arp_div = 2;
     if (set.arp_gate < 10u || set.arp_gate > 100u) set.arp_gate = 55;
     if (set.arp_oct < 1u || set.arp_oct > 3u) set.arp_oct = 1;
@@ -973,6 +1447,9 @@ static void clamp_set(void) {
     if (set.lfo_depth > 100u) set.lfo_depth = 0;
     if (set.lfo_cc < 1u || set.lfo_cc > 127u) set.lfo_cc = 1;
     if (set.lfo_dest > 2u) set.lfo_dest = 2;
+    if (set.env_on > 1u) set.env_on = 0;
+    if (set.env_cc < 1u || set.env_cc > 127u) set.env_cc = 11;
+    if (set.env_amt > 100u) set.env_amt = 100;
 }
 static void audio_params(void) {
     uint32_t i, w = set.wet;
@@ -988,20 +1465,27 @@ static void do_save(void) {
     if (settings_save((const void *)&set, sizeof set)) message("NOT SAVED");
     else { message("SAVED"); dirty = 0; }
 }
-
 static void go(uint32_t pg) {
     if (pg == page) return;
-    if (pg == PG_SEQ || pg == PG_EDIT) { tones_release(); arp_stop(); nheld = 0; }
+    if (pg == PG_SEQ || pg == PG_EDIT) { tones_release(); arp_stop(); nheld = 0; nplayed = 0; }
     page = (uint8_t)pg;
     fx_alt = 0;
+    env_alt = 0;
+    edit_alt = 0;
     skip_keys = 1;
     paint_req = 1;
 }
 static uint32_t clk_seen;
 static void transport(int run, int send_midi) {
     fm1_irq_off();
-    if (run) { seq_run = 1; seq_epoch++; }
-    else seq_run = 0;
+    if (run) {
+        if (set.song_len > 1u && set.song_len <= 16u) {
+            song_i = 0;
+            set.pattern = set.song[0];
+        }
+        seq_run = 1;
+        seq_epoch++;
+    } else seq_run = 0;
     clk_seen = clk_out_n;
     fm1_irq_on();
     if (send_midi) midi_out(run ? 0xFAu : 0xFCu, 0, 0);
@@ -1012,13 +1496,16 @@ static int black_note(uint32_t note) { return (0x54Au >> (note % 12u)) & 1; }
 static void keys_init(void) {
     uint32_t k, w = 0, b = 0;
     for (k = 0; k < 27u; k++) {
-        if (!black_note(KEY0 + k) && w < 16u) { white_at[w] = (uint8_t)k; white_ord[k] = (uint8_t)w++; }
+        if (!black_note(53u + k) && w < 16u) { white_at[w] = (uint8_t)k; white_ord[k] = (uint8_t)w++; }
         else white_ord[k] = 255u;
-        if (black_note(KEY0 + k)) { black_ord[k] = (uint8_t)b++; }
+        if (black_note(53u + k)) black_ord[k] = (uint8_t)b++;
         else black_ord[k] = 255u;
     }
     nwhite = (uint8_t)w;
     nblack = (uint8_t)b;
+    (void)white_at;
+    (void)nwhite;
+    (void)nblack;
 }
 
 static uint32_t lfo_phase, lfo_ms;
@@ -1054,13 +1541,6 @@ static void lfo_update(void) {
 }
 
 static uint32_t ext_ms, ext_flag, clk_n, clk_t0, clk_div;
-static int drum_note(uint32_t note) {
-    if (note == 35u || note == 36u) return 0;
-    if (note == 38u || note == 40u) return 1;
-    if (note == 42u || note == 44u || note == 46u) return 2;
-    if (note == 41u || note == 43u || note == 45u || note == 47u || note == 48u || note == 50u) return 3;
-    return -1;
-}
 static void midi_in(void) {
     uint8_t st, d1, d2;
     uint32_t nmsg = 0;
@@ -1092,17 +1572,20 @@ static void midi_in(void) {
         if (st == 0xFBu) { transport(1, 0); continue; }
         if (st == 0xFCu) { transport(0, 0); continue; }
         if (ch == 9u) {
-            int d = drum_note(d1);
+            int d = drum_ix(d1);
             if (ty == 0x90u && d2 && d >= 0) request_drum((uint32_t)d, d2, 1);
             continue;
         }
         if (set.ch && ch != (uint32_t)set.ch - 1u) continue;
         if (ty == 0x90u && d2) {
-            if (set.arp_mode && page != PG_SEQ && page != PG_EDIT) held_add(d1);
-            else { tone_start(d1, d2); }
+            take_push(d1, d2);
+            menv_trig(1);
+            if (set.arp_mode && page != PG_SEQ && page != PG_EDIT) note_hold(d1);
+            else tone_start(d1, d2);
         } else if (ty == 0x80u || ty == 0x90u) {
-            if (set.arp_mode) held_del(d1);
+            if (set.arp_mode) note_drop(d1);
             tone_stop(d1);
+            menv_release();
         }
     }
     in_midi = 0;
@@ -1110,13 +1593,14 @@ static void midi_in(void) {
 static void app_idle(void) { if (idle_ok) midi_in(); }
 
 static void turn_page(uint32_t k, int e) {
-    uint32_t m;
+    uint32_t m, tr;
     if (!e) return;
     hot = (uint8_t)k;
     dirty = 1;
     t_change = fm1_ms;
     paint_req = 1;
     m = set.machine > 5u ? 5u : set.machine;
+    tr = trk();
     if (page == PG_FX && !fx_alt) {
         if (k == 0u) { set.machine = (uint8_t)clampu((int)set.machine + e, 0, 5); fx_apply(1); return; }
         if (m == 5u) { message("MACHINE IS OFF"); return; }
@@ -1137,17 +1621,39 @@ static void turn_page(uint32_t k, int e) {
         audio_params();
     } else if (page == PG_HOME) {
         set.mix[k] = (uint8_t)clampu((int)set.mix[k] + e, 0, 100);
+    } else if (page == PG_SEQ && seq_view == VW_SONG) {
+        uint32_t sl = set.song_len < 1u ? 1u : set.song_len;
+        if (sl > 16u) sl = 16u;
+        if (song_slot >= sl) song_slot = 0;
+        if (k == 0u) song_slot = (uint8_t)clampu((int)song_slot + e, 0, (int)sl - 1);
+        else if (k == 1u) set.song[song_slot] = (uint8_t)clampu((int)set.song[song_slot] + e, 0, 7);
+        else if (k == 2u) set.song_len = (uint8_t)clampu((int)set.song_len + e, 1, 16);
+        else set.track = (uint8_t)clampu((int)set.track + e, 0, 7);
     } else if (page == PG_SEQ) {
         uint32_t len = set.length < 1u ? 1u : set.length;
         if (k == 0u) cursor = (uint8_t)clampu((int)cursor + e, 0, (int)len - 1);
-        else if (k == 1u) set.pat[set.pattern][set.track][cursor] = (uint8_t)clampu((int)set.pat[set.pattern][set.track][cursor] + e, 0, 127);
+        else if (k == 1u && tr >= 4u)
+            set.pat[set.pattern][tr][cursor] = (uint8_t)clampu((int)set.pat[set.pattern][tr][cursor] + e, 0, 127);
+        else if (k == 1u)
+            set.pat[set.pattern][tr][cursor] = (uint8_t)clampu((int)set.pat[set.pattern][tr][cursor] + e, 0, 127);
+        else if (k == 2u && seq_view == VW_PIANO && tr >= 4u)
+            set.pvel[set.pattern][tr - 4u][cursor] = (uint8_t)clampu((int)set.pvel[set.pattern][tr - 4u][cursor] + e, 1, 127);
         else if (k == 2u) set.length = (uint8_t)clampu((int)set.length + e, 1, 16);
-        else set.track = (uint8_t)clampu((int)set.track + e, 0, 3);
+        else set.track = (uint8_t)clampu((int)set.track + e, 0, 7);
+    } else if (page == PG_EDIT && edit_alt) {
+        if (tr >= 4u) set.mch[k] = (uint8_t)clampu((int)set.mch[k] + e, 1, 16);
+        else set.gm[k] = (uint8_t)clampu((int)set.gm[k] + e, 0, 127);
+    } else if (page == PG_EDIT && tr >= 4u) {
+        uint32_t mt = tr - 4u, len = set.length < 1u ? 1u : set.length;
+        if (cursor >= len) cursor = 0;
+        if (k == 0u) set.mch[mt] = (uint8_t)clampu((int)set.mch[mt] + e, 1, 16);
+        else if (k == 1u) set.mnote[mt] = (uint8_t)clampu((int)set.mnote[mt] + e, 1, 127);
+        else if (k == 2u) set.pat[set.pattern][tr][cursor] = (uint8_t)clampu((int)set.pat[set.pattern][tr][cursor] + e, 0, 127);
+        else set.pvel[set.pattern][mt][cursor] = (uint8_t)clampu((int)set.pvel[set.pattern][mt][cursor] + e, 0, 127);
     } else if (page == PG_EDIT) {
-        uint32_t tr = set.track > 3u ? 0u : set.track;
         set.drum[tr][k] = (uint8_t)clampu((int)set.drum[tr][k] + e, 0, 100);
     } else if (page == PG_ARP) {
-        if (k == 0u) set.arp_mode = (uint8_t)clampu((int)set.arp_mode + e, 0, 4);
+        if (k == 0u) set.arp_mode = (uint8_t)clampu((int)set.arp_mode + e, 0, 6);
         else if (k == 1u) set.arp_div = (uint8_t)clampu((int)set.arp_div + e, 0, 3);
         else if (k == 2u) set.arp_gate = (uint8_t)clampu((int)set.arp_gate + e, 10, 100);
         else set.arp_oct = (uint8_t)clampu((int)set.arp_oct + e, 1, 3);
@@ -1156,6 +1662,11 @@ static void turn_page(uint32_t k, int e) {
         else if (k == 1u) set.lfo_depth = (uint8_t)clampu((int)set.lfo_depth + e, 0, 100);
         else if (k == 2u) set.lfo_cc = (uint8_t)clampu((int)set.lfo_cc + e, 1, 127);
         else set.lfo_dest = (uint8_t)clampu((int)set.lfo_dest + e, 0, 2);
+    } else if (page == PG_ENV && env_alt) {
+        if (k == 0u) set.env_on = (uint8_t)clampu((int)set.env_on + e, 0, 1);
+        else if (k == 1u) set.env_cc = (uint8_t)clampu((int)set.env_cc + e, 1, 127);
+        else if (k == 2u) set.env_amt = (uint8_t)clampu((int)set.env_amt + e, 0, 100);
+        else message("TRIG IS A NOTE");
     } else if (page == PG_ENV) {
         uint8_t v = k == 0u ? set.atk : k == 1u ? set.dec : k == 2u ? set.sus : set.rel;
         v = (uint8_t)clampu((int)v + e, 0, 100);
@@ -1183,8 +1694,25 @@ static uint32_t page_of(uint32_t b) {
     return PG_N;
 }
 static uint8_t btn_for(uint32_t pg) {
-    static const uint8_t b[PG_N] = { BTN_FX, BTN_HOME, BTN_SEQ, BTN_EDIT, BTN_ARP, BTN_LFO, BTN_ENV, BTN_GLO };
+    static const uint8_t b[PG_N] = {BTN_FX, BTN_HOME, BTN_SEQ, BTN_EDIT, BTN_ARP, BTN_LFO, BTN_ENV, BTN_GLO};
     return b[pg < PG_N ? pg : 0];
+}
+static void track_step(int e) {
+    int t = (int)set.track + e;
+    while (t < 0) t += 8;
+    set.track = (uint8_t)(t & 7);
+    paint_req = 1;
+}
+static void overdub_note(uint32_t note, uint32_t vel) {
+    uint32_t tr, len, s;
+    if (!(rec && seq_run) || !note || note > 127u) return;
+    tr = trk() >= 4u ? trk() : 4u;
+    len = set.length < 1u ? 1u : set.length;
+    s = seq_pos;
+    if (s >= len) return;
+    set.pat[set.pattern][tr][s] = (uint8_t)note;
+    set.pvel[set.pattern][tr - 4u][s] = (uint8_t)(vel > 127u ? 127u : vel);
+    paint_req = 1;
 }
 
 static void app_main(void) {
@@ -1214,17 +1742,28 @@ static void app_main(void) {
         audio_params();
         offs_flush();
         lfo_update();
+        menv_tick();
         arp_run();
         midi_in();
 
         if (seq_gen != seen_gen) {
-            uint32_t d;
+            uint32_t d, gate_ms = 15000u / (set.tempo < 40u ? 40u : set.tempo);
             seen_gen = seq_gen;
-            for (d = 0; d < 4u; d++)
+            if (gate_ms < 40u) gate_ms = 40u;
+            if (gate_ms > 400u) gate_ms = 400u;
+            for (d = 0; d < 4u; d++) {
                 if (seq_vel_out[d]) {
-                    midi_out(0x99u, GM[d], seq_vel_out[d]);
-                    note_off_later(9u, GM[d], 60u);
+                    midi_out(0x99u, set.gm[d], seq_vel_out[d]);
+                    note_off_later(9u, set.gm[d], 60u);
+                    menv_trig(0);
                 }
+                if (seq_mnote[d]) {
+                    uint32_t ch = midi_ch(d);
+                    midi_out(0x90u | ch, seq_mnote[d], seq_mvel[d]);
+                    note_off_later(ch, seq_mnote[d], gate_ms);
+                    menv_trig(0);
+                }
+            }
             if (page == PG_SEQ) paint_req = 1;
         }
         {
@@ -1238,7 +1777,7 @@ static void app_main(void) {
         down = keys & ~prev;
         up = prev & ~keys;
         prev = keys;
-        base = (uint32_t)((int32_t)KEY0 + 12 * (int32_t)set.oct);
+        base = (uint32_t)(53 + 12 * (int32_t)set.oct);
         for (k = 0; k < 27u; k++) {
             uint32_t vel = 100;
 #if BOARD_SMK37
@@ -1246,31 +1785,65 @@ static void app_main(void) {
             if (!vel) vel = 100;
 #endif
             if (down >> k & 1u) {
-                if (page == PG_SEQ && white_ord[k] != 255u && white_ord[k] < set.length) {
-                    uint8_t w = white_ord[k], *cell = (uint8_t *)&set.pat[set.pattern][set.track][w];
+                uint32_t note = base + k;
+                int piano = page == PG_SEQ && seq_view == VW_PIANO && trk() >= 4u;
+                if (note > 127u) note = 127u;
+                if (piano) {
+                    uint32_t tr = trk(), len = set.length < 1u ? 1u : set.length, stn = cursor, ch;
+                    if (len > 16u) len = 16u;
+                    if (stn >= len) stn = 0;
+                    set.pat[set.pattern][tr][stn] = (uint8_t)note;
+                    set.pvel[set.pattern][tr - 4u][stn] = (uint8_t)vel;
+                    cursor = (uint8_t)((stn + 1u) % len);
+                    ch = midi_ch(tr - 4u);
+                    midi_out(0x90u | ch, note, vel);
+                    note_off_later(ch, note, 140u);
+                    menv_trig(0);
+                    dirty = 1;
+                    t_change = fm1_ms;
+                    paint_req = 1;
+                    message_step(stn + 1u, note);
+                } else if (page == PG_SEQ && seq_view != VW_SONG && white_ord[k] != 255u && white_ord[k] < set.length) {
+                    uint8_t w = white_ord[k];
+                    uint32_t tr = trk();
+                    uint8_t *cell = (uint8_t *)&set.pat[set.pattern][tr][w];
                     cursor = w;
-                    *cell = *cell ? 0 : 100;
-                    if (*cell) request_drum(set.track, 100, 0);
-                    dirty = 1; t_change = fm1_ms; paint_req = 1;
-                } else if (page == PG_SEQ && black_ord[k] < 4u) {
-                    request_drum(black_ord[k], vel, 1);
-                } else if (page == PG_EDIT) {
-                    request_drum(set.track, vel, 1);
+                    if (tr >= 4u) {
+                        if (*cell) { *cell = 0; set.pvel[set.pattern][tr - 4u][w] = 0; }
+                        else {
+                            uint8_t n = set.mnote[tr - 4u];
+                            if (n < 1u) n = 60;
+                            *cell = n;
+                            set.pvel[set.pattern][tr - 4u][w] = 100;
+                        }
+                    } else {
+                        *cell = *cell ? 0 : 100;
+                        if (*cell) request_drum(tr, 100, 0);
+                    }
+                    dirty = 1;
+                    t_change = fm1_ms;
+                    paint_req = 1;
+                } else if (page == PG_EDIT && trk() < 4u) {
+                    request_drum(trk(), vel, 1);
                 } else if (black_ord[k] < 4u) {
                     request_drum(black_ord[k], vel, 1);
                 } else {
-                    uint32_t note = base + k;
-                    if (note > 127u) note = 127u;
                     down_note[k] = (uint8_t)note;
-                    if (set.arp_mode) held_add((uint8_t)note);
+                    down_count++;
+                    take_push(note, vel);
+                    menv_trig(1);
+                    overdub_note(note, vel);
+                    if (set.arp_mode && page != PG_SEQ && page != PG_EDIT) note_hold((uint8_t)note);
                     else { tone_start(note, vel); midi_out(0x90u | out_ch(), note, vel); }
                 }
             }
             if ((up >> k & 1u) && down_note[k]) {
-                if (set.arp_mode) held_del(down_note[k]);
+                if (down_count) down_count--;
+                if (set.arp_mode) note_drop(down_note[k]);
                 tone_stop(down_note[k]);
                 midi_out(0x80u | out_ch(), down_note[k], 0);
                 down_note[k] = 0;
+                menv_release();
             }
         }
 #if BOARD_SMK37
@@ -1282,14 +1855,17 @@ static void app_main(void) {
                 if (note > 127u) note = 127u;
                 ext_note[key] = (uint8_t)note;
                 if (page != PG_SEQ && page != PG_EDIT) {
-                    if (set.arp_mode) held_add((uint8_t)note);
+                    take_push(note, vel);
+                    menv_trig(1);
+                    if (set.arp_mode) note_hold((uint8_t)note);
                     else { tone_start(note, vel); midi_out(0x90u | out_ch(), note, vel); }
                 }
             } else if (ext_note[key]) {
-                if (set.arp_mode) held_del(ext_note[key]);
+                if (set.arp_mode) note_drop(ext_note[key]);
                 tone_stop(ext_note[key]);
                 midi_out(0x80u | out_ch(), ext_note[key], 0);
                 ext_note[key] = 0;
+                menv_release();
             }
         }
         while ((e = smk_pad_take()) >= 0) {
@@ -1305,20 +1881,39 @@ static void app_main(void) {
         b = fm1_input_edges(&rel);
         pg = page_of(b);
         if (pg == PG_FX && page == PG_FX) { fx_alt ^= 1u; paint_req = 1; }
-        else if (pg < PG_N) go(pg);
-        if (b & (1u << BTN_SEL)) {
-            set.track = (uint8_t)((set.track + 1u) & 3u);
+        else if (pg == PG_ENV && page == PG_ENV) { env_alt ^= 1u; paint_req = 1; }
+        else if (pg == PG_EDIT && page == PG_EDIT) { edit_alt ^= 1u; paint_req = 1; }
+        else if (pg == PG_SEQ && page == PG_SEQ) {
+            seq_view = (uint8_t)((seq_view + 1u) % 3u);
             paint_req = 1;
-        }
+        } else if (pg == PG_HOME && page == PG_HOME) {
+            set.engine = (uint8_t)((engi() + 1u) & 3u);
+            dirty = 1;
+            t_change = fm1_ms;
+            paint_req = 1;
+            message(ENGMSG[set.engine]);
+        } else if (pg == PG_ARP && page == PG_ARP) {
+            set.arp_latch ^= 1u;
+            if (!set.arp_latch) { nheld = 0; nplayed = 0; arp_stop(); }
+            dirty = 1;
+            t_change = fm1_ms;
+            paint_req = 1;
+            message(set.arp_latch ? "LATCH ON" : "LATCH OFF");
+        } else if (pg < PG_N) go(pg);
+        if (b & (1u << BTN_SEL)) track_step(1);
         if (b & (1u << BTN_PLAY)) transport(!seq_run, 1);
-        if (b & (1u << BTN_REC)) { rec ^= 1u; paint_req = 1; }
+        if (b & (1u << BTN_REC)) {
+            if (!seq_run) { take_commit(); paint_req = 1; }
+            else { rec ^= 1u; paint_req = 1; }
+        }
         if (b & (1u << BTN_SAVE)) save_req = 1;
         if (b & (1u << BTN_OCT_DOWN) && set.oct > -2) { set.oct--; dirty = 1; t_change = fm1_ms; }
         if (b & (1u << BTN_OCT_UP)) {
             if (page == PG_GLO) {
                 if (clear_arm && (int32_t)(fm1_ms - clear_arm) < 0) {
                     uint32_t d, s;
-                    for (d = 0; d < 4u; d++) for (s = 0; s < 16u; s++) set.pat[set.pattern][d][s] = 0;
+                    for (d = 0; d < 8u; d++) for (s = 0; s < 16u; s++) set.pat[set.pattern][d][s] = 0;
+                    for (d = 0; d < 4u; d++) for (s = 0; s < 16u; s++) set.pvel[set.pattern][d][s] = 0;
                     dirty = 1; t_change = fm1_ms; paint_req = 1; clear_arm = 0;
                     message("CLEARED");
                 } else { clear_arm = fm1_ms + 1600u; message("PRESS OCT+ TO CLEAR"); }
@@ -1328,12 +1923,7 @@ static void app_main(void) {
         if ((e = fm1_enc_take(ENC_KNOB2)) != 0) turn_page(1, e);
         if ((e = fm1_enc_take(ENC_KNOB3)) != 0) turn_page(2, e);
         if ((e = fm1_enc_take(ENC_KNOB4)) != 0) turn_page(3, e);
-        if ((e = fm1_enc_take(ENC_SELECT)) != 0) {
-            int t = (int)set.track + e;
-            while (t < 0) t += 4;
-            set.track = (uint8_t)(t & 3);
-            paint_req = 1;
-        }
+        if ((e = fm1_enc_take(ENC_SELECT)) != 0) track_step(e);
         if ((e = fm1_enc_take(ENC_PRESETS)) != 0) {
             int p = (int)set.pattern + e;
             while (p < 0) p += 8;
@@ -1352,19 +1942,21 @@ static void app_main(void) {
         fm1_led_key(BTN_OCT_UP, set.oct > 0);
         for (k = 0; k < 27u; k++) {
             int on = 0, glow = 0;
-            if (page == PG_SEQ) {
+            if (page == PG_SEQ && seq_view != VW_SONG) {
                 uint8_t w = white_ord[k];
                 if (w != 255u && w < set.length) {
-                    if (set.pat[set.pattern][set.track][w]) glow = 1;
+                    uint32_t tr = trk();
+                    uint32_t onv = tr >= 4u ? set.pat[set.pattern][tr][w] : set.pat[set.pattern][tr][w];
+                    if (onv) glow = 1;
                     if (seq_run && w == seq_pos) { on = 1; glow = 0; }
                 }
-            } else if (black_ord[k] < 4u) glow = 1;
+            } else if (!(page == PG_SEQ && seq_view == VW_PIANO) && black_ord[k] < 4u) glow = 1;
             fm1_led_key(KEY_LED(k), on || (down_note[k] && voice[0].stage));
             fm1_led_key_glow(KEY_LED(k), glow && !on);
         }
         {
             uint32_t v;
-            for (k = 0; k < 27u && page != PG_SEQ; k++) {
+            for (k = 0; k < 27u && !(page == PG_SEQ && seq_view != VW_SONG); k++) {
                 int lit = 0;
                 for (v = 0; v < NV; v++)
                     if (voice[v].stage && voice[v].stage != 4u && voice[v].note == base + k) lit = 1;
@@ -1372,27 +1964,21 @@ static void app_main(void) {
             }
         }
 #if BOARD_SMK37
-        for (k = 0; k < 16u; k++) {
-            uint32_t on = 0;
-            padled_set(k, on ? 90 : 8, on ? 50 : 4, on ? 10 : 0);
-        }
+        for (k = 0; k < 16u; k++) padled_set(k, 8, 4, 0);
         padled_flush();
 #endif
 
         if (!msg_on() && msg) { msg = 0; hint_req = 1; }
         st = (uint32_t)seq_pos | ((uint32_t)seq_run << 5) | ((uint32_t)set.tempo << 8) |
-             ((uint32_t)set.pattern << 16) | ((uint32_t)set.track << 20) | ((uint32_t)page << 24);
+             ((uint32_t)set.pattern << 16) | ((uint32_t)trk() << 20) | ((uint32_t)page << 24) |
+             ((uint32_t)seq_view << 28);
         if (paint_req || st != stamp) {
             int full = paint_req || (st >> 24) != (stamp >> 24);
             if ((st & 0xFF00FFu) != (stamp & 0xFF00FFu)) full = 1;
             paint(full || paint_req);
             paint_req = 0;
             stamp = st;
-            stamp_drawn = st;
-        } else if (hint_req) {
-            paint(0);
-        }
-        (void)stamp_drawn;
+        } else if (hint_req) paint(0);
 
         if (save_req && seq_run) { message("STOP TO SAVE"); save_req = 0; }
         else if ((save_req || dirty) && !seq_run && !sounding && (save_req || fm1_ms - t_change > 2000u)) {

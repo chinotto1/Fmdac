@@ -2,14 +2,14 @@
   "current": {
     "id": "fmdac",
     "name": "Fmdac",
-    "version": "0.3",
+    "version": "0.4",
     "enabled": true,
-    "product": "FM-1_963",
+    "product": "FM-1_964",
     "size": 612188,
-    "sha256": "74b2acf674ca7e7e422d002a884e1636cc5526d9e6a73b28029cf8988509dbab",
+    "sha256": "f3b26a8c6584292d1cffede24c0c705f5f9f08c4da8f95baa711a19239b3c2bf",
     "filename": "fmdac.fwsc",
     "source": "https://github.com/chinotto1/Fmdac",
-    "description": "Fmdac 0.3, identity FM-1_963. The header names the track: KICK, SNARE, HAT, or TOM. SELECT, SEL, and K4 on SEQ change it. PLAY starts a 16-step pattern, and a drum stops after its decay instead of hissing on. FX runs the mix through Prophet VS, DX7, SP-1200, Emulator II, or S950 on the way to the headphones. The computer records that same mix. Audio from the computer is not converted. No sample ROMs, no take recorder, no OCTACHRON map."
+    "description": "Fmdac 0.4, identity FM-1_964. Eight tracks: KICK, SNARE, HAT, TOM, and silent MIDI tracks M1–M4. SELECT, SEL, and K4 change the track. HOME cycles synthesized 808, 909, CR-78, and SDS characters. SEQ cycles a step grid, a keys-and-cursor piano roll, and a song chain. PLAY walks that chain when its length is more than one pattern. REC while stopped quantizes a short performance into the pattern and sets the BPM. ARP has up, down, up-down, random, chord, order, and latch. A second press of ENV sends a MIDI CC envelope. EDIT sets GM drum notes and the MIDI-track channels. FX runs Prophet VS, DX7, SP-1200, Emulator II, or S950. While the computer streams audio to the FM-1, that audio is converted on the way to the headphones. When nothing is streaming, the headphones hear the FM-1's own mix. The computer records the headphone mix. No sample ROMs. The take is quantized, not a looper. There is no OCTACHRON factory map."
   },
   "recovery": [
     {
