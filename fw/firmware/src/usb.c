@@ -998,7 +998,8 @@ static int up_pull(void *ctx, int16_t *l, int16_t *r)
 }
 
 /* One stereo frame for the headphone mix. Returns 0 when the computer is not streaming.
- * 44.1 kHz copies one frame. 48 kHz steps by PLAY_48_STEP, trimmed once per block.
+ * 44.1 kHz copies one frame while the step is 65536. Any other step, including 48 kHz
+ * and a trimmed 44.1 kHz clock, uses the band-limited filter in play_down.h.
  * An empty ring repeats the last frame instead of writing a zero into the decay. */
 static int uac_play_frame(int32_t *l, int32_t *r)
 {

@@ -322,14 +322,17 @@ def main():
         suffix += "-" + model
     PRODUCT = BOARD_PREFIX[BOARD] + "0"
     name = f"{stem}{suffix}.fwsc"
-    if a.release:                   # 0.1..0.9 are FM-1_961..969 (960 is the dev image). 0.10 is FM-1_970.
+    if a.release:                   # 0.1..0.9 are FM-1_961..969 (960 is the dev image). 0.10..0.39 are FM-1_970..999.
         m = re.fullmatch(r"(\d)\.(\d{1,2})(\.\d)?(-[A-Za-z0-9]+)?", a.release)
         if not m:
-            raise SystemExit(f"--release {a.release}: use X.Y, 0.10, X.Y.Z, or X.Y-suffix")
+            raise SystemExit(f"--release {a.release}: use X.Y, 0.10..0.39, X.Y.Z, or X.Y-suffix")
         if len(m[2]) == 1:
             PRODUCT = BOARD_PREFIX[BOARD] + m[2]
-        elif BOARD == "fm1" and m[1] == "0" and m[2] == "10":
-            PRODUCT = "FM-1_970"
+        elif BOARD == "fm1" and m[1] == "0":
+            minor = int(m[2])          # 0.10 is FM-1_970, 0.11 is FM-1_971. 960 stays the dev image.
+            if minor < 10 or minor > 39:
+                raise SystemExit(f"--release {a.release}: FM-1 identities stop at 0.39")
+            PRODUCT = f"FM-1_{960 + minor}"
         else:
             raise SystemExit(f"--release {a.release}: the package identity is three digits")
         VERSION = m[1] + "." + m[2] + (m[3] or "")

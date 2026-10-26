@@ -1,11 +1,12 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Fmdac 0.10. Four kit tracks, a sequencer, and the converter.
+/* Fmdac 0.11. Four kit tracks, a sequencer, and the converter.
  *
  *   FX     machine, bits, rate, tone. Press FX again: wet, drive, bits, rate.
  *          OFF copies the mix. The other machines are the published
  *          converters below. While a computer streams USB audio, that
- *          stream is mixed in. 44.1 kHz is copied. 48 kHz is interpolated
- *          to the headphone clock, and the ratio follows the buffer.
+ *          stream is mixed in. 44.1 kHz is copied while the clocks agree.
+ *          48 kHz goes through a 32-point filter that holds its level up
+ *          to 17 kHz. The ratio follows the buffer.
  *          USB audio also records the mix.
  *   HOME   the level of each kit, T1 to T4. The selected kit is marked.
  *          Press HOME again: that kit becomes MIDI, or a drum machine.
@@ -39,8 +40,9 @@
  *   as a take gets. REC while playing overdubs the playhead.
  *   Tracks: T1 T2 T3 T4. All four play together. The sounding drums are
  *   four voices, one per kind of hit, shared by the kits. A MIDI kit
- *   does not use those voices. A saved song from 0.8 loads as the
- *   factory kits, because a pattern can now store a MIDI pitch.
+ *   does not use those voices. A saved song from 0.9 or 0.10 loads.
+ *   A saved song from 0.8 loads as the factory kits, because a pattern
+ *   can now store a MIDI pitch.
  *
  * Integers only. No float, no 64-bit division. Converter coefficients are
  * cast_tab.h, baked on a computer by tools/bake_cast.c. */

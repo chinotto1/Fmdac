@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* The headphone resampler. A full ring used to skip one input frame on
  * every read. That skip is the crunch, including with the converter off. */
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -146,6 +147,43 @@ int main(void)
     if (trim > -5000) {
         printf("lock low trim %d\n", trim);
         return 1;
+    }
+    /* Level of a sine through the band-limited filter. A two-point blend is
+     * about -0.8 dB at 8 kHz and -1.8 dB at 12 kHz; this must stay within
+     * 0.35 dB. 65506 is a 44.1 kHz stream after the clock trim. */
+    {
+        static const struct { uint32_t step; double hz, fs; } tone[] = {
+            {71331u, 1000.0, 48000.0},
+            {71331u, 8000.0, 48000.0},
+            {71331u, 12000.0, 48000.0},
+            {65506u, 8000.0, 44100.0 * 65506.0 / 65536.0},
+        };
+        uint32_t ti;
+        for (ti = 0; ti < sizeof tone / sizeof tone[0]; ti++) {
+            double t = 0, acc = 0, db, rms, expect;
+            int n = 0;
+            memset(&rs, 0, sizeof rs);
+            rs.step = tone[ti].step;
+            w = r = 0;
+            for (i = 0; i < 6000; i++) {
+                while (w - r < 80u) {
+                    double s = sin(2.0 * 3.141592653589793 * tone[ti].hz * t);
+                    ring[w & (N - 1u)] = (int16_t)lrint(8000.0 * s);
+                    t += 1.0 / tone[ti].fs;
+                    w++;
+                }
+                play_rs_out(&rs, 1, pull, 0, &ol, &orr);
+                if (i >= 1500) {
+                    acc += (double)ol * (double)ol;
+                    n++;
+                }
+            }
+            rms = sqrt(acc / n);
+            expect = 8000.0 / sqrt(2.0);
+            db = 20.0 * log10(rms / expect);
+            printf("sine %.0f Hz step %u  %+.2f dB\n", tone[ti].hz, tone[ti].step, db);
+            if (db < -0.35 || db > 0.35) return 1;
+        }
     }
     printf("play_rs ok\n");
     return 0;
