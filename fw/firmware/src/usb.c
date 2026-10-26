@@ -69,10 +69,9 @@ static struct {
 /* USB audio input. The I2S clock is not locked to USB (about 44,117.6 Hz against the host's 44,100):
  * the endpoint is asynchronous, so each 1 ms packet carries what the ring holds, 44 or 45 frames
  * (the 44.1 pattern) and one more or one fewer while the ring's fill drifts out of its band.
- * The render writes HALF_FRAMES (128) frames every 2.9 ms; the fill measured when a render starts is
- * the low point of that saw tooth, and is kept in UA_LO..UA_HI. A frame waits in the ring for that fill
- * plus its place in the render: 80..256 frames, ~3.8 ms on average (256-frame halves and a 96..160
- * band: ~5.8 ms). Measured under load (65 % CPU): a 64..112 band started renders at
+ * The render writes HALF_FRAMES frames (64 on the device, about 1.5 ms; the host tests keep 256).
+ * The fill measured when a render starts is the low point of that saw tooth, and is kept in
+ * UA_LO..UA_HI. Measured under load with a longer half (65 % CPU): a 64..112 band started renders at
  * 48..119 with no glitch; one render was once seen 29 frames under the floor: a packet (46) must
  * still be in hand then. */
 #define UA_N 512u                /* ring, frames (16-bit L | R << 16); a power of two */
@@ -81,7 +80,7 @@ static struct {
 #define UA_HI 128u
 #define UAC_RATE 44100u
 #if FELUCCA_UAC_48K
-/* 48 kHz: the same times in 48 kHz frames (x 160 / 147); a render of HALF_FRAMES gives 139..140 frames */
+/* 48 kHz: the same times in 48 kHz frames (x 160 / 147) */
 #define UA_PRIME48 113u
 #define UA_LO48 87u
 #define UA_HI48 139u
@@ -97,9 +96,8 @@ static uint32_t ua_ring[UA_N];
 static volatile uint32_t ua_w, ua_r;
 static uint32_t ep4tx[UA_MAXF] __attribute__((aligned(32)));
 #if FELUCCA_UAC_OUT
-/* One render at 48 kHz wants about 279 frames, and the host keeps sending
- * during the gap before that render. 256 was already full, so the newest
- * packet was thrown away on every block. */
+/* The host keeps sending while the other half plays. At 48 kHz a 64-frame
+ * half leaves about 70 frames in that gap. 512 still covers a late render. */
 #define UP_N 512u                                   /* host -> device frames; one writer (USB), one reader (audio) */
 static uint32_t up_ring[UP_N];
 static volatile uint32_t up_w, up_r, up_drop;
@@ -909,8 +907,10 @@ static void ep1_rx(void)                                /* leaves the packet (NA
 }
 
 #if FELUCCA_UAC_OUT
+#include "play_down.h"
 /* One isochronous OUT packet. The USB poll is the only writer of up_w. The audio ISR is the only
- * writer of up_r. A full ring drops the new frames so the reader can catch up. */
+ * writer of up_r. A full ring drops the new frames. The packet length says 48 kHz or 44.1, and
+ * that wins over a stale SET_CUR because it is what is actually arriving. */
 static void ep2_rx(void)
 {
     uint32_t csr, n, i, w, r, fill;
@@ -921,6 +921,7 @@ static void ep2_rx(void)
     n = sie_rd(S_RXCOUNT1) | (sie_rd(S_RXCOUNT2) << 8);
     if (n > 196u)
         n = 196u;
+    uac.p48 = (uint8_t)play_rate48(n / 4u, uac.p48);
     fm1_usb_rx_sync();
     w = up_w;
     r = up_r;
@@ -957,10 +958,10 @@ static int uac_play_on(void)
     return uac.out_alt && (uint32_t)(fm1_ms - uac.out_ms) < 80u;
 }
 
-#include "play_down.h"
-
 static PlayRs up_rs;
 static uint8_t up_seen_rate;
+static uint8_t up_avg_on;
+static int32_t up_avg;
 static int32_t up_trim;
 static uint16_t up_blk;
 static uint32_t up_step;
@@ -973,7 +974,7 @@ static uint32_t up_fill_now(void)
     return w - rd;
 }
 
-/* One input frame. The ratio, not a skip, is what keeps the ring in bounds. */
+/* One input frame. A long queue is dropped in uac_play_frame. This read does not skip. */
 static int up_pull(void *ctx, int16_t *l, int16_t *r)
 {
     uint32_t w, rd, fill, s, drop;
@@ -1000,7 +1001,9 @@ static int up_pull(void *ctx, int16_t *l, int16_t *r)
 /* One stereo frame for the headphone mix. Returns 0 when the computer is not streaming.
  * 44.1 kHz copies one frame while the step is 65536. Any other step, including 48 kHz
  * and a trimmed 44.1 kHz clock, uses the band-limited filter in play_down.h.
- * An empty ring repeats the last frame instead of writing a zero into the decay. */
+ * An empty ring repeats the last frame instead of writing a zero into the decay.
+ * Once per half, a queue past PLAY_FILL_CAP is dropped back to PLAY_FILL_TARGET.
+ * The ratio is that smoothed level, so a full queue does not change the pitch. */
 static int uac_play_frame(int32_t *l, int32_t *r)
 {
     uint8_t rate;
@@ -1011,6 +1014,7 @@ static int uac_play_frame(int32_t *l, int32_t *r)
         up_trim = 0;
         up_blk = 0;
         up_step = 0;
+        up_avg_on = 0;
         *l = 0;
         *r = 0;
         return 0;
@@ -1022,15 +1026,36 @@ static int uac_play_frame(int32_t *l, int32_t *r)
         up_trim = 0;
         up_blk = 0;
         up_step = 0;
+        up_avg_on = 0;
     }
     if ((int32_t)(up_drop - up_r) > 0)
         play_rs_reset(&up_rs);
     nominal = rate ? PLAY_48_STEP : 65536u;
     if (!up_step)
         up_step = nominal;
-    if (++up_blk >= 256u) {
+    if (++up_blk >= HALF_FRAMES) {
+        uint32_t fill = up_fill_now();
+        int caught = 0;
+        int32_t seen;
         up_blk = 0;
-        up_step = play_lock_step(nominal, up_fill_now(), &up_trim);
+        fill = play_catch_fill(fill, &caught);
+        if (caught) {
+            uint32_t rd = up_w - PLAY_FILL_TARGET;
+            up_drop = rd;
+            RING_PUBLISH();
+            up_r = rd;
+            play_rs_reset(&up_rs);
+            up_avg = (int32_t)PLAY_FILL_TARGET;
+            up_avg_on = 1;
+            seen = up_avg;
+        } else {
+            seen = (int32_t)fill;
+            up_avg = play_avg_fill(up_avg, up_avg_on, seen);
+            up_avg_on = 1;
+        }
+        if (up_avg < 0)
+            up_avg = 0;
+        up_step = play_lock_step(nominal, (uint32_t)up_avg, &up_trim);
     }
     up_rs.step = up_step;
     return play_rs_out(&up_rs, rate, up_pull, 0, l, r);

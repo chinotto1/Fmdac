@@ -329,7 +329,7 @@ def main():
         if len(m[2]) == 1:
             PRODUCT = BOARD_PREFIX[BOARD] + m[2]
         elif BOARD == "fm1" and m[1] == "0":
-            minor = int(m[2])          # 0.10 is FM-1_970, 0.11 is FM-1_971. 960 stays the dev image.
+            minor = int(m[2])          # 0.10 is FM-1_970, 0.12 is FM-1_972. 960 stays the dev image.
             if minor < 10 or minor > 39:
                 raise SystemExit(f"--release {a.release}: FM-1 identities stop at 0.39")
             PRODUCT = f"FM-1_{960 + minor}"

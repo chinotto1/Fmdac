@@ -1,24 +1,32 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* Headphone clock helper. The render runs near 44118 Hz. A 48 kHz USB
- * stream is 160/147 of that. Reading it one frame per output, then
- * skipping a frame whenever the ring was past 96, threw audio away at
- * the start of every block. That crunch is gone: frames are kept, and
- * play_lock_step trims the ratio from the buffer once per block.
+ * stream is 160/147 of that. Skipping a frame whenever the ring was past
+ * 96 threw audio away at the start of every block. The resampler does not
+ * do that.
  *
- * A two-point blend of the kept frames is still a lowpass. At the 48 kHz
- * ratio it is about -0.8 dB at 8 kHz and -3 dB at 16 kHz, on every
- * machine, including OFF, which does not call the converter. The filter
- * in play_fir.h replaces that blend. It is a 32-tap windowed sinc, 64
- * phases, and the fraction between two phases is blended. On the host it
- * stays level through 17 kHz. A step of exactly 65536 still copies one
- * frame, so a matched 44.1 kHz stream is unchanged until the lock trims
- * it. The same filter does that trim. */
+ * The playback ratio is the queue level, not a running sum. Adding to a
+ * trim whenever the queue looked full walked the pitch: one packet of
+ * timing was enough to send it the wrong way, and a full queue yanked it
+ * by hundreds of counts. play_avg_fill smooths eight blocks first.
+ * play_lock_step then sets the trim from that average. A clock that is
+ * about 28 counts off sits that many frames below PLAY_FILL_TARGET, and
+ * it stays there. A long queue is delay. play_catch_fill drops it back
+ * to the target instead of calling it a clock error.
+ *
+ * The filter in play_fir.h is a 32-tap windowed sinc, 64 phases, and the
+ * fraction between two phases is blended. On the host it stays level
+ * through 17 kHz. A step of exactly 65536 copies one frame, so a matched
+ * 44.1 kHz stream is unchanged until the lock trims it. The same filter
+ * does that trim. The table lives in RAM: the headphone interrupt must
+ * not wait on flash. */
 #ifndef PLAY_DOWN_H
 #define PLAY_DOWN_H
 #include <stdint.h>
 #include "play_fir.h"
 
 #define PLAY_48_STEP ((48000u << 16) / 44100u) /* 71331: 160/147 in Q16 */
+#define PLAY_FILL_TARGET 96u                     /* smoothed queue the lock aims at */
+#define PLAY_FILL_CAP 160u                       /* above this, the queue is late, not a rate error */
 
 typedef struct {
     int16_t hl[PLAY_FIR_T];
@@ -42,27 +50,16 @@ static inline int32_t play_lerp(int32_t a, int32_t b, uint32_t pos)
 }
 
 /* Once per headphone block. nominal is 65536 at 44.1 or PLAY_48_STEP at
- * 48. fill is how many input frames are waiting. The trim is remembered
- * by the caller. A full buffer keeps moving the ratio until the buffer
- * comes back; a normal buffer only nudges it. */
+ * 48. fill is the smoothed queue. The trim is replaced, not accumulated:
+ * twelve full readings stay at one offset. */
 static inline uint32_t play_lock_step(uint32_t nominal, uint32_t fill, int32_t *trim)
 {
-    int32_t err = (int32_t)fill - 96;
-    int32_t add = err / 2;
-    int32_t t, step;
-    if (fill > 400u)
-        add = 500;
-    else if (fill < 8u)
-        add = -500;
-    if (add > 500)
-        add = 500;
-    if (add < -500)
-        add = -500;
-    t = *trim + add;
-    if (t > 14000)
-        t = 14000;
-    if (t < -14000)
-        t = -14000;
+    int32_t t = (int32_t)fill - (int32_t)PLAY_FILL_TARGET;
+    int32_t step;
+    if (t > 8000)
+        t = 8000;
+    if (t < -8000)
+        t = -8000;
     *trim = t;
     step = (int32_t)nominal + t;
     if (step < 20000)
@@ -70,6 +67,38 @@ static inline uint32_t play_lock_step(uint32_t nominal, uint32_t fill, int32_t *
     if (step > 120000)
         step = 120000;
     return (uint32_t)step;
+}
+
+/* Eight-block average of the queue. primed is 0 on the first sample. */
+static inline int32_t play_avg_fill(int32_t avg, int primed, int32_t sample)
+{
+    if (!primed)
+        return sample;
+    return avg + (sample - avg) / 8;
+}
+
+/* Packet length in frames. 47..49 is a 48 kHz stream, 43..45 is 44.1.
+ * 46 and a short packet keep the previous guess. */
+static inline int play_rate48(uint32_t frames, int prev)
+{
+    if (frames >= 47u && frames <= 49u)
+        return 1;
+    if (frames >= 43u && frames <= 45u)
+        return 0;
+    return prev ? 1 : 0;
+}
+
+/* A queue past PLAY_FILL_CAP is caught up to PLAY_FILL_TARGET. *caught
+ * tells the caller to drop. The lock is shown the target, so one backlog
+ * does not become a pitch change. */
+static inline uint32_t play_catch_fill(uint32_t fill, int *caught)
+{
+    if (fill > PLAY_FILL_CAP) {
+        *caught = 1;
+        return PLAY_FILL_TARGET;
+    }
+    *caught = 0;
+    return fill;
 }
 
 static inline void play_push(int16_t *h, int16_t s)

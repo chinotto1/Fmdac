@@ -103,7 +103,12 @@ static volatile uint32_t fm1_ms;                /* milliseconds since power-on (
 #include "gfx.c"
 
 #define FS 44100u                               /* the sample rate */
-#define HALF_FRAMES 256u                        /* I2S half buffer: 5.8 ms (as sloopDX: the USB audio band is set for it) */
+#ifndef HALF_FRAMES
+/* Host tests define 256 above this line, so their script timing stays put.
+ * On the device, 64 frames is about 1.5 ms. A 256-frame half is 5.8 ms, and
+ * the computer keeps filling the headphone queue while that half plays. */
+#define HALF_FRAMES 64u
+#endif
 #define HALF_WORDS (HALF_FRAMES * 2u)
 #define FELUCCA_OTA 1
 #define FELUCCA_CDC 0

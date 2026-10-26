@@ -130,9 +130,10 @@ int main(void)
     }
     printf("deep max step %d, read %u\n", max_step, r);
     if (max_step > 40 || r < 80u) return 1;
-    /* The lock holds a matched buffer and walks a full one toward the ratio. */
+    /* The trim is the queue error. A full reading sets it once and does not
+     * keep adding. That add was the pitch slam. */
     trim = 0;
-    if (play_lock_step(PLAY_48_STEP, 96u, &trim) != PLAY_48_STEP || trim != 0) {
+    if (play_lock_step(PLAY_48_STEP, PLAY_FILL_TARGET, &trim) != PLAY_48_STEP || trim != 0) {
         printf("lock idle %d\n", trim);
         return 1;
     }
@@ -140,13 +141,146 @@ int main(void)
     for (i = 0; i < 12; i++)
         play_lock_step(65536u, 500u, &trim);
     printf("lock high trim %d\n", trim);
-    if (trim < 5000) return 1;
+    if (trim != 500 - (int32_t)PLAY_FILL_TARGET) return 1;
     trim = 0;
-    for (i = 0; i < 12; i++)
-        play_lock_step(PLAY_48_STEP, 0u, &trim);
-    if (trim > -5000) {
+    play_lock_step(PLAY_48_STEP, 0u, &trim);
+    if (trim != -(int32_t)PLAY_FILL_TARGET) {
         printf("lock low trim %d\n", trim);
         return 1;
+    }
+    if (play_avg_fill(0, 0, 40) != 40) return 1;
+    if (play_avg_fill(40, 1, 80) != 45) return 1;
+    if (play_rate48(48u, 0) != 1 || play_rate48(47u, 0) != 1 || play_rate48(49u, 0) != 1) return 1;
+    if (play_rate48(44u, 1) != 0 || play_rate48(43u, 1) != 0 || play_rate48(45u, 1) != 0) return 1;
+    if (play_rate48(46u, 1) != 1 || play_rate48(46u, 0) != 0 || play_rate48(0u, 1) != 1) return 1;
+    {
+        int caught = 0;
+        if (play_catch_fill(500u, &caught) != PLAY_FILL_TARGET || !caught) return 1;
+        if (play_catch_fill(100u, &caught) != 100u || caught) return 1;
+    }
+    /* Device half is 64 frames (platform.c). Packets land while that half
+     * plays; the render then drains them. The I2S clock is 24 MHz / 544.
+     * The smoothed queue sets the ratio. A matched stream settles near the
+     * clock offset, without underruns and without further catch-ups. */
+    {
+        static const struct {
+            const char *name;
+            uint32_t fs_in;
+            int rate48;
+            int miss;
+            uint32_t start;
+        } run[] = {
+            {"48k steady", 48000u, 1, 0, 140u},
+            {"48k full", 48000u, 1, 0, 500u},
+            {"44k steady", 44100u, 0, 0, 140u},
+            {"44k full", 44100u, 0, 0, 500u},
+            {"48k low", 48000u, 1, 0, 40u},
+            {"48k packets fix nominal", 48000u, 1, 1, 200u},
+        };
+        uint32_t ri;
+        for (ri = 0; ri < sizeof run / sizeof run[0]; ri++) {
+            const uint32_t half = 64u, ring_n = 512u;
+            uint32_t nominal = run[ri].rate48 && !run[ri].miss ? PLAY_48_STEP : 65536u;
+            uint32_t w = run[ri].start, rd = 0, pos = 0, step = nominal, sample = 0, pkt = 0;
+            uint32_t underrun = 0, caps = 0;
+            uint32_t under_mark = 0, caps_mark = 0, marked = 0;
+            uint32_t tail_lo = 100000u, tail_hi = 0;
+            int32_t trimv = 0, avg = 0, max_jump = 0, prev_trim = 0;
+            uint8_t primed = 0, avg_on = 0;
+            uint64_t limit = 15ull * 24000000ull / 544ull;
+            uint64_t tail = limit - 5ull * 24000000ull / 544ull;
+            uint32_t want = (uint32_t)((uint64_t)run[ri].fs_in * 65536ull * 544ull / 24000000ull);
+            int32_t want_trim = (int32_t)want - (int32_t)(run[ri].rate48 ? PLAY_48_STEP : 65536u);
+            while ((uint64_t)sample < limit) {
+                uint32_t end = sample + half, n;
+                if (!marked && (uint64_t)sample >= tail) {
+                    under_mark = underrun;
+                    caps_mark = caps;
+                    marked = 1;
+                    prev_trim = trimv;
+                }
+                for (n = 0; n < half; n++) {
+                    uint32_t guard;
+                    if (n + 1u == half) {
+                        uint32_t fill = w - rd;
+                        int caught = 0;
+                        int32_t seen, jump;
+                        fill = play_catch_fill(fill, &caught);
+                        if (caught) {
+                            caps++;
+                            rd = w - PLAY_FILL_TARGET;
+                            primed = 0;
+                            pos = 0;
+                            avg = (int32_t)PLAY_FILL_TARGET;
+                            avg_on = 1;
+                            seen = avg;
+                        } else {
+                            seen = (int32_t)fill;
+                            avg = play_avg_fill(avg, avg_on, seen);
+                            avg_on = 1;
+                        }
+                        if (avg < 0) avg = 0;
+                        step = play_lock_step(nominal, (uint32_t)avg, &trimv);
+                        if (marked) {
+                            jump = trimv - prev_trim;
+                            if (jump < 0) jump = -jump;
+                            if (jump > max_jump) max_jump = jump;
+                            if (fill < tail_lo) tail_lo = fill;
+                            if (fill > tail_hi) tail_hi = fill;
+                        }
+                        prev_trim = trimv;
+                    }
+                    if (!primed) {
+                        if (w == rd) underrun++;
+                        else rd++;
+                        primed = 1;
+                        pos = 0;
+                    } else if (step == 65536u) {
+                        if (w == rd) underrun++;
+                        else rd++;
+                    } else {
+                        pos += step;
+                        guard = 0;
+                        while (pos >= 65536u && guard < 3u) {
+                            pos -= 65536u;
+                            if (w == rd) underrun++;
+                            else rd++;
+                            guard++;
+                        }
+                    }
+                }
+                while (pkt < 1000000u) {
+                    uint32_t at = (uint32_t)(((uint64_t)pkt * 24000ull) / 544ull);
+                    uint32_t frames, k;
+                    if (at >= end) break;
+                    frames = run[ri].rate48 ? 48u : 44u + (pkt % 10u == 9u);
+                    if (run[ri].miss && pkt == 2u) {
+                        nominal = PLAY_48_STEP;
+                        trimv = 0;
+                        prev_trim = 0;
+                        step = nominal;
+                        avg_on = 0;
+                        primed = 0;
+                    }
+                    for (k = 0; k < frames; k++) {
+                        if (w - rd + 1u >= ring_n) break;
+                        w++;
+                    }
+                    pkt++;
+                }
+                sample = end;
+            }
+            printf("%s trim %d want %d caps %u tailcaps %u under %u tailunder %u tail %u..%u jump %d\n",
+                   run[ri].name, trimv, want_trim, caps, caps - caps_mark, underrun, underrun - under_mark,
+                   tail_lo, tail_hi, max_jump);
+            if (max_jump > 8) return 1;
+            if (underrun - under_mark) return 1;
+            if (caps - caps_mark) return 1;
+            if (run[ri].start > PLAY_FILL_CAP && caps < 1u) return 1;
+            if (!run[ri].miss && caps > 2u) return 1;
+            if (trimv < want_trim - 8 || trimv > want_trim + 8) return 1;
+            if (tail_lo < 16u || tail_hi > PLAY_FILL_CAP) return 1;
+        }
     }
     /* Level of a sine through the band-limited filter. A two-point blend is
      * about -0.8 dB at 8 kHz and -1.8 dB at 12 kHz; this must stay within
