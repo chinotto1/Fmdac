@@ -1,0 +1,6 @@
+# Fmdac 0.13. A MIDI kit stays silent. C4 holds kick 36 until release.
+40 btn 8
+80 btn 8
+300 keys 128
+900 keys 0
+1200 end

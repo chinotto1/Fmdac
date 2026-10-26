@@ -1,0 +1,20 @@
+# Fmdac 0.13. SEL lists the machines. 808, then DMX, 707, and LINN.
+# Each C4 hit should sound, and the three PCM hits should differ.
+200 keys 128
+400 keys 0
+450 btn 3
+500 enc 0 4
+540 btn 3
+700 keys 128
+900 keys 0
+940 btn 3
+980 enc 0 1
+1020 btn 3
+1200 keys 128
+1400 keys 0
+1440 btn 3
+1480 enc 0 1
+1520 btn 3
+1700 keys 128
+1900 keys 0
+2200 end

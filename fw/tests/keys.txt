@@ -1,0 +1,40 @@
+# Fmdac 0.13. Off the grid, keys follow Skiff's GM map at octave 0:
+# C4 kick 36, D4 snare 38, F#4 closed hat 42, A#4 open hat 46,
+# F4 tom 45, C#4 rim 37. A held key stays on until release.
+# OCT+ held at the key-down is velocity 127 and does not move the
+# octave until the next pass. OCT- held is velocity 40.
+# Two keys on the same note: the first release does not send note-off.
+100 btndown 1
+100 keys 128
+180 keys 0
+200 btnup 1
+240 btn 0
+300 btndown 0
+300 keys 128
+380 keys 0
+400 btnup 0
+440 btn 1
+520 keys 128
+600 keys 0
+640 keys 512
+720 keys 0
+760 keys 8192
+840 keys 0
+880 keys 131072
+960 keys 0
+1000 keys 4096
+1080 keys 0
+1120 keys 256
+1200 keys 0
+1300 keys 128
+1700 keys 0
+1800 keys 192
+1900 keys 64
+2000 keys 0
+2100 keys 640
+2300 keys 128
+2400 keys 0
+2500 btn 1
+2600 keys 128
+2680 keys 0
+2900 end

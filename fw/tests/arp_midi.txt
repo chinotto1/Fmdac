@@ -1,0 +1,9 @@
+# Fmdac 0.13. ARP on a MIDI kit sends the key on the kit channel and
+# plays no local sine. C4 is keyboard note 60. 1/16 at 120 is 125 ms.
+40 btn 8
+80 btn 8
+120 btn 10
+200 enc 2 1
+500 keys 128
+1200 keys 0
+1600 end

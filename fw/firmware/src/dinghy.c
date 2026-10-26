@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Fmdac 0.12. Four kit tracks, a sequencer, and the converter.
+/* Fmdac 0.13. Four kit tracks, a sequencer, and the converter.
  *
  *   FX     machine, bits, rate, tone. Press FX again: wet, drive, bits, rate.
  *          OFF copies the mix. The other machines are the published
@@ -13,14 +13,21 @@
  *          Press HOME again: that kit becomes MIDI, or a drum machine.
  *          A MIDI kit sends notes and stays silent here. SEL then opens
  *          its map list. A drum kit is a synthesized 808, 909, CR78, or
- *          SDS, not a sample ROM. SEL then opens that list of machines.
+ *          SDS, or an original PCM voice in the manner of a DMX, TR-707,
+ *          or LinnDrum. Those three are not the machines' sample ROMs.
+ *          SEL then opens that list of machines.
  *   SELECT picks the kit. SELECT moves inside a list. SEL picks.
  *          HOME closes a list and leaves the kit as it was.
  *   GRID   SEQ. White keys are the 16 steps of the lane. A black key
- *          picks a lane and plays it. K4 is the lane. Off the grid, a
- *          drum kit plays C kick, D snare, F# closed hat. A MIDI kit
- *          whose scale is not MAP plays that scale, and the note holds
- *          until the key comes up. Press SEQ again for SONG.
+ *          picks a lane and plays it. K4 is the lane. Off the grid the
+ *          keys follow Skiff's General MIDI drum map: at octave 0 the
+ *          first C, C4, is the kick, D4 the snare, F#4 the closed hat,
+ *          and A#4 the open hat. OCT moves that map. A held key stays
+ *          on until release, on the kit channel, with velocity. OCT-
+ *          while the key goes down is velocity 40. OCT+ is 127. The
+ *          SMK-37 uses its own key velocity. A MIDI kit whose scale is
+ *          not MAP plays that scale, and that note holds until release.
+ *          Press SEQ again for SONG.
  *   SONG   16 slots. K1 picks the slot, K2 the pattern, K3 the length.
  *          PLAY walks the chain when the length is more than one.
  *   EDIT   a drum kit: tune, decay, tone, drop, then the lane levels.
@@ -30,7 +37,9 @@
  *          A blank lane sends nothing. OneShot and Tekno have no fixed
  *          published chart. This is not every preset in the OCTACHRON app.
  *   ARP    up, down, up-down, random, chord, and as-played. Press ARP again
- *          to latch the held keys. The keys play the sine only on this page.
+ *          to latch the held keys. On a drum kit the keys play the sine
+ *          on this page. On a MIDI kit they stay silent and the arp
+ *          sends on that kit's channel.
  *   LFO    MIDI CC, and level or tune on this mix when DEST says so.
  *   ENV    attack, decay, sustain, release of the key tone. Press ENV again:
  *          a MIDI CC envelope on each new note.
@@ -41,9 +50,9 @@
  *   as a take gets. REC while playing overdubs the playhead.
  *   Tracks: T1 T2 T3 T4. All four play together. The sounding drums are
  *   four voices, one per kind of hit, shared by the kits. A MIDI kit
- *   does not use those voices. A saved song from 0.9, 0.10, or 0.11 loads.
- *   A saved song from 0.8 loads as the factory kits, because a pattern
- *   can now store a MIDI pitch.
+ *   does not use those voices. A saved song from 0.9, 0.10, 0.11, or
+ *   0.12 loads. A saved song from 0.8 loads as the factory kits, because
+ *   a pattern can store a MIDI pitch.
  *
  * Integers only. No float, no 64-bit division. Converter coefficients are
  * cast_tab.h, baked on a computer by tools/bake_cast.c. */
@@ -100,7 +109,7 @@ typedef char set_fits[(sizeof(Set) <= 4000u) ? 1 : -1];
 static volatile Set set;
 static uint8_t page, fx_alt, env_alt, edit_alt, seq_view, rec, hot, save_req, song_slot;
 static volatile uint8_t seq_run, audio_ready, sounding, ext_on, fx_bypass, song_i;
-static uint8_t idle_ok, in_midi, down_count;
+static uint8_t idle_ok, in_midi, down_count, down_note[27], down_ch[27];
 static uint32_t t_change, dirty;
 static volatile uint32_t seq_epoch, seq_gen, ext_count, clk_out_n, wet_q8;
 static volatile uint8_t seq_pos, seq_nev;
@@ -134,10 +143,16 @@ static const char *const MACH[6] = {"VS", "DX7", "SP-1200", "EMU II", "S950", "O
 static const char *const TNAM[5] = {"RAW", "DARK", "OPEN", "BRIGHT", "FULL"};
 static const char *const KITN[4] = {"T1", "T2", "T3", "T4"};
 static const char *lname[NKIT][NLANE];
-/* C kick, C# rim, D snare, D# clap, E tom, F open hat, F# closed hat, G crash. */
-static const uint8_t KEY_LANE[12] = {0, 6, 1, 4, 3, 5, 2, 7, 0, 1, 4, 3};
-static const char *const ENG[4] = {"808", "909", "CR78", "SDS"};
-static const char *const ENGMSG[4] = {"ENGINE 808", "ENGINE 909", "ENGINE CR78", "ENGINE SDS"};
+/* 0 kick, 1 snare, 2 clap, 3 closed hat, 4 open hat, 5 tom, 6 rim, 7 cym.
+ * Skiff's table for GM notes 35..81, folded onto these eight roles. */
+static const uint8_t GM_ROLE[47] = {
+    0, 0, 6, 1, 2, 1, 5, 3, 5, 3, 5, 4, 5, 5, 7, 5, 7, 7, 7, 3, 7, 7, 7, 6,
+    7, 5, 5, 5, 5, 5, 5, 5, 7, 7, 3, 3, 6, 6, 3, 3, 6, 6, 6, 5, 5, 7, 7};
+#define NENG 7u
+static const char *const ENG[NENG] = {"808", "909", "CR78", "SDS", "DMX", "707", "LINN"};
+static const char *const ENGMSG[NENG] = {
+    "ENGINE 808", "ENGINE 909", "ENGINE CR78", "ENGINE SDS",
+    "ENGINE DMX", "ENGINE 707", "ENGINE LINN"};
 static const char *const SCALE_N[6] = {"MAP", "CHROM", "MAJOR", "MINOR", "PENTA", "DORIAN"};
 static const char *const MODE[7] = {"OFF", "UP", "DOWN", "UP-DN", "RAND", "CHORD", "ORDER"};
 static const char *const DIVN[4] = {"1/4", "1/8", "1/16", "1/32"};
@@ -367,9 +382,79 @@ static int kit_midi(uint32_t ki) {
     if (ki >= NKIT) ki = 0;
     return (set.kit[ki].engine & 0x80u) != 0;
 }
+static uint32_t eng_ix(uint32_t e) {
+    e &= 7u;
+    return e < NENG ? e : 0u;
+}
 static uint32_t kit_eng(uint32_t ki) {
     if (ki >= NKIT) ki = 0;
-    return set.kit[ki].engine & 3u;
+    return eng_ix(set.kit[ki].engine);
+}
+/* The lane's sounding role, from the name the map gave it. -1 is unnamed. */
+static int lane_role(const char *s) {
+    if (!s || s[0] == '-' || !s[0]) return -1;
+    if (prefix(s, "KICK") || prefix(s, "BD") || prefix(s, "BASS")) return 0;
+    if (prefix(s, "CLAP") || prefix(s, "CLP") || prefix(s, "CP")) return 2;
+    if (prefix(s, "OH") || prefix(s, "OP") || contains(s, "HHOP") || contains(s, "OPHH")) return 4;
+    if (prefix(s, "HAT") || prefix(s, "CH") || prefix(s, "HH") || prefix(s, "HIH") || contains(s, "HH")) return 3;
+    if (prefix(s, "RIM") || prefix(s, "RS") || prefix(s, "STICK")) return 6;
+    if (prefix(s, "CY") || prefix(s, "CR") || prefix(s, "RID") || prefix(s, "BELL")
+        || prefix(s, "CB") || prefix(s, "COW")) return 7;
+    if (prefix(s, "TOM") || prefix(s, "LT") || prefix(s, "MT") || prefix(s, "HT")
+        || prefix(s, "LC") || prefix(s, "MC") || prefix(s, "HC") || contains(s, "CONG")) return 5;
+    if (prefix(s, "SN") || prefix(s, "SD")) return 1;
+    return -1;
+}
+/* Skiff drum_keys: key 0 is F3, and key 7 (C4) is GM note 36 at octave 0. */
+static uint32_t drum_key_note(uint32_t key) {
+    int32_t n = 29 + 12 * (int32_t)set.oct + (int32_t)key;
+    if (n < 0) n = 0;
+    if (n > 127) n = 127;
+    return (uint32_t)n;
+}
+static uint32_t gm_fold(uint32_t note) {
+    if (note >= 35u && note <= 81u) return note;
+    return 36u + (note + 84u) % 12u;
+}
+static uint32_t lane_for_role(uint32_t ki, uint32_t role, uint32_t gm) {
+    static const uint8_t fb[8] = {0, 1, 4, 2, 5, 3, 6, 7};
+    uint32_t i, best = NLANE, err = 1000u;
+    if (ki >= NKIT) ki = 0;
+    if (role > 7u) role = 0;
+    for (i = 0; i < NLANE; i++) {
+        int r = lane_role(lname[ki][i]);
+        uint32_t n, e;
+        if (r != (int)role) continue;
+        if (role != 1u && role != 5u && role != 7u) return i;
+        n = set.kit[ki].note[i];
+        e = n > gm ? n - gm : gm - n;
+        if (e < err) { err = e; best = i; }
+    }
+    if (best < NLANE) return best;
+    return fb[role];
+}
+static uint32_t lane_for_note(uint32_t ki, uint32_t note) {
+    uint32_t fold, i, gm;
+    if (ki >= NKIT) ki = 0;
+    if (note > 127u) note = 127u;
+    fold = gm_fold(note);
+    for (i = 0; i < NLANE; i++) if (set.kit[ki].note[i] == note) return i;
+    if (fold != note)
+        for (i = 0; i < NLANE; i++) if (set.kit[ki].note[i] == fold) return i;
+    gm = fold >= 35u && fold <= 81u ? fold : 36u;
+    return lane_for_role(ki, GM_ROLE[gm - 35u], gm);
+}
+static uint32_t lane_for_key(uint32_t ki, uint32_t key) {
+    return lane_for_note(ki, drum_key_note(key));
+}
+static int drum_key_lit(uint32_t ki, uint32_t key) {
+    uint32_t n = drum_key_note(key), f = gm_fold(n), i;
+    if (ki >= NKIT) ki = 0;
+    for (i = 0; i < NLANE; i++) {
+        uint8_t ln = set.kit[ki].note[i];
+        if (ln && (ln == n || ln == f)) return 1;
+    }
+    return 0;
 }
 static uint32_t lane_now(void) { return set.lane < NLANE ? set.lane : 0u; }
 static uint32_t pat_now(void) { return set.pattern < NPAT ? set.pattern : 0u; }
@@ -478,12 +563,85 @@ static int32_t fall(int32_t a, uint32_t sh) {
 }
 
 typedef struct {
-    uint32_t ph, inc, target;
+    uint32_t ph, inc, target, spos, sstep;
     int32_t amp, namp, lp;
+    const int16_t *src;
     uint16_t click;
-    uint8_t alive, model, engc, sh, gain, tune, drop;
+    uint8_t alive, model, engc, sh, gain, tune, drop, pcm;
 } Drum;
 static Drum drumv[4];
+/* Original PCM, baked once into RAM. Not a DMX, TR-707, or LinnDrum ROM.
+ * 8192 frames is about 186 ms at 44.1 kHz. Engines 4, 5, and 6 play these. */
+#define SMP_N 8192u
+static int16_t smp[3][4][SMP_N] __attribute__((section(".pool")));
+static uint32_t bake_rng;
+static int32_t bake_noise(void) {
+    bake_rng = bake_rng * 1664525u + 1013904223u;
+    return (int32_t)(bake_rng >> 17) - 16384;
+}
+static int16_t pcm_q(int32_t s, uint32_t bits) {
+    uint32_t sh = bits >= 16u ? 0u : 16u - bits;
+    if (s > 32767) s = 32767;
+    if (s < -32767) s = -32767;
+    if (sh) s = (s >> sh) << sh;
+    return (int16_t)s;
+}
+/* DMX is 8-bit and punchy, 707 is 6-bit and shorter, Linn is 8-bit and longer.
+ * The pitch drop is baked in. Playback only scales level, tune, and decay.
+ * DEC is the envelope time constant in samples (env -= env >> DEC). The hat
+ * is a short metallic pair plus noise, in the band a dark converter keeps. */
+static void bake_pcm(void) {
+    static const uint8_t BITS[3] = {8, 6, 8};
+    static const uint8_t DROP[3] = {9, 10, 11};
+    static const uint16_t CLICK[3] = {200, 80, 50};
+    static const uint32_t K0[3] = {22000000u, 18000000u, 16000000u};
+    static const uint32_t K1[3] = {3800000u, 7000000u, 3200000u};
+    static const uint32_t S0[3] = {18000000u, 24000000u, 14000000u};
+    static const uint32_t T0[3] = {10000000u, 12000000u, 8000000u};
+    static const uint32_t T1[3] = {5000000u, 8000000u, 4000000u};
+    static const uint8_t BODY[3] = {90, 40, 120};
+    static const uint8_t NOIS[3] = {140, 200, 80};
+    static const uint8_t DEC[3][4] = {{11, 10, 12, 11}, {10, 9, 10, 10}, {12, 11, 14, 12}};
+    static const uint32_t HINC[3] = {170000000u, 280000000u, 120000000u};
+    uint32_t e, m;
+    for (e = 0; e < 3u; e++) {
+        for (m = 0; m < 4u; m++) {
+            uint32_t i, ph = 0x40000000u, inc, end, click = 0;
+            int32_t env = 28000;
+            bake_rng = 0xC0FFEEu ^ (e * 97u + m * 13u + 1u);
+            if (m == 0u) { inc = K0[e]; end = K1[e]; click = CLICK[e]; }
+            else if (m == 1u) { inc = S0[e]; end = S0[e]; }
+            else if (m == 3u) { inc = T0[e]; end = T1[e]; }
+            else { inc = HINC[e]; end = 0; }
+            for (i = 0; i < SMP_N; i++) {
+                int32_t s;
+                if (m == 2u) {
+                    int32_t nz = bake_noise();
+                    s = (ph & 0x80000000u) ? 14000 : -14000;
+                    s += ((ph * 3u) & 0x80000000u) ? 10000 : -10000;
+                    s += nz >> (e == 1u ? 2 : 3);
+                    ph += inc;
+                } else {
+                    s = sine(ph);
+                    ph += inc;
+                    if (inc > end) {
+                        uint32_t d = (inc - end) >> DROP[e];
+                        inc = d ? inc - d : end;
+                    }
+                    if (i < click) s += bake_noise() >> 2;
+                    if (m == 1u) {
+                        s = (s * (int32_t)BODY[e]) >> 7;
+                        s += (bake_noise() * (int32_t)NOIS[e]) >> 7;
+                    }
+                }
+                if (env < 0) env = 0;
+                s = (s * env) >> 15;
+                env -= env >> DEC[e][m];
+                smp[e][m][i] = pcm_q(s, BITS[e]);
+            }
+        }
+    }
+}
 
 static uint32_t kit_gain(uint32_t ki, uint32_t lane) {
     uint32_t lv, ll;
@@ -504,13 +662,38 @@ static void drum_hit(uint32_t model, uint32_t vel, uint32_t eng, uint32_t gain,
     int decs;
     if (model > 3u || !vel || !gain) return;
     if (vel > 127u) vel = 127u;
-    if (eng > 3u) eng = 0;
+    if (eng >= NENG) eng = 0;
     if (gain > 255u) gain = 255u;
     if (tune > 100u) tune = 100u;
     if (snap > 100u) snap = 100u;
     if (drop > 100u) drop = 100u;
     if (dec > 100u) dec = 100u;
     v = &drumv[model];
+    if (eng >= 4u) {
+        uint32_t ti = tune / 10u, tf = tune - ti * 10u, mul;
+        if (ti > 10u) ti = 10u;
+        mul = TUNE_Q12[ti];
+        if (ti < 10u && tf) mul += (uint32_t)(TUNE_Q12[ti + 1u] - mul) * tf / 10u;
+        decs = (int)dec;
+        if (decs < 0) decs = 0;
+        if (decs > 100) decs = 100;
+        v->model = (uint8_t)model;
+        v->engc = (uint8_t)eng;
+        v->pcm = 1;
+        v->src = smp[eng - 4u][model];
+        v->spos = 0;
+        v->sstep = (65536u * mul) >> 12;
+        if (!v->sstep) v->sstep = 1u;
+        v->sh = (uint8_t)(6u + (uint32_t)decs * 8u / 100u);
+        v->gain = (uint8_t)gain;
+        v->amp = (int32_t)vel * 140;
+        if (v->amp > 24000) v->amp = 24000;
+        v->namp = 0;
+        v->click = 0;
+        v->alive = 1;
+        return;
+    }
+    v->pcm = 0;
     decs = (int)dec + (int)ENG_DEC[eng];
     if (decs < 0) decs = 0;
     if (decs > 100) decs = 100;
@@ -621,7 +804,7 @@ static void render_step(void) {
     if (len > 16u) len = 16u;
     if (step_i >= len) step_i = 0;
     for (ki = 0; ki < NKIT; ki++) {
-        uint32_t eng = set.kit[ki].engine & 3u, ch = set.kit[ki].ch;
+        uint32_t eng = kit_eng(ki), ch = set.kit[ki].ch;
         if (ch < 1u || ch > 16u) ch = 10u + ki;
         for (lane = 0; lane < NLANE; lane++) {
             uint8_t v = *(volatile uint8_t *)&set.vel[p][ki][lane][step_i];
@@ -785,7 +968,30 @@ static void app_audio(int32_t *out, uint32_t n) {
         eng = v->engc;
         if (dsh > 14u) dsh = 14u;
         if (model > 3u) model = 1u;
-        if (eng > 3u) eng = 0;
+        if (eng >= NENG) eng = 0;
+        if (v->pcm && v->src) {
+            uint32_t step = v->sstep;
+            if (lt) {
+                int32_t m = 1024 + lt;
+                if (m < 256) m = 256;
+                step = (uint32_t)(((int64_t)step * m) >> 10);
+            }
+            if (!step) step = 1u;
+            for (i = 0; i < n; i++) {
+                uint32_t ix = v->spos >> 16;
+                int32_t s;
+                if (ix >= SMP_N || !v->amp) { v->alive = 0; v->amp = 0; break; }
+                s = v->src[ix];
+                v->spos += step;
+                s = (s * v->amp) >> 15;
+                v->amp = fall(v->amp, dsh);
+                s = (s * gs) >> 7;
+                out[2u * i] += s;
+            }
+            if (!v->amp) v->alive = 0;
+            continue;
+        }
+        v->pcm = 0;
         cut = 1u + (v->tune > 100u ? 0u : (100u - v->tune) / 25u) + ENG_HAT[eng];
         if (cut < 1u) cut = 1u;
         if (cut > 8u) cut = 8u;
@@ -1289,7 +1495,7 @@ static void status_text(char *d) {
     if (list_on) {
         n = put_str(d, 40, 0, " ");
         if (list_kind) {
-            put_str(d, 40, n, ENG[list_sel & 3u]);
+            put_str(d, 40, n, ENG[eng_ix(list_sel)]);
             return;
         }
         {
@@ -1345,7 +1551,7 @@ static const char *hint_text(void) {
 #define LIST_SHOWN 10u
 #define LIST_RH 19u
 #define LIST_Y 16u
-static uint32_t list_n(void) { return list_kind ? 4u : (NMAP ? NMAP : 1u); }
+static uint32_t list_n(void) { return list_kind ? NENG : (NMAP ? NMAP : 1u); }
 static void list_clamp(void) {
     uint32_t n = list_n();
     uint32_t sel = list_sel, top = list_top;
@@ -1386,12 +1592,13 @@ static void list_move(int e) {
 static void list_pick(void) {
     uint32_t tr = trk();
     if (list_kind) {
-        uint8_t e = (uint8_t)((set.kit[tr].engine & 0x80u) | (list_sel & 3u));
-        if ((set.kit[tr].engine & 3u) != (list_sel & 3u)) {
+        uint32_t low = eng_ix(list_sel);
+        uint8_t e = (uint8_t)((set.kit[tr].engine & 0x80u) | low);
+        if (kit_eng(tr) != low) {
             set.kit[tr].engine = e;
             dirty = 1;
             t_change = fm1_ms;
-            message(ENGMSG[list_sel & 3u]);
+            message(ENGMSG[low]);
         }
     } else {
         uint32_t m = list_sel;
@@ -1447,7 +1654,7 @@ static void draw_list(void) {
             if (ix >= list_n()) continue;
             on = ix == list_sel;
             list_pill(4, ry + 1, 222, (int32_t)LIST_RH - 2, on ? C_HI : C_LINE);
-            if (list_kind) s = ENG[ix & 3u];
+            if (list_kind) s = ENG[eng_ix(ix)];
             else {
                 s = map_of(ix)->hint;
                 if (s && s[0] == ' ') s++;
@@ -1528,13 +1735,65 @@ static void note_off_later(uint32_t ch, uint32_t note, uint32_t ms) {
     off_note[slot] = (uint8_t)note;
     off_at[slot] = fm1_ms + ms;
 }
+static void menv_trig(int held);
+static void menv_release(void);
+static int note_is_down(uint32_t ch, uint32_t note) {
+    uint32_t k;
+    for (k = 0; k < 27u; k++)
+        if (down_note[k] == note && down_ch[k] == ch) return 1;
+    return 0;
+}
+static void cancel_off(uint32_t ch, uint32_t note) {
+    uint32_t i;
+    for (i = 0; i < 16u; i++)
+        if (off_on[i] && off_ch[i] == ch && off_note[i] == note) off_on[i] = 0;
+}
 static void offs_flush(void) {
     uint32_t i;
     for (i = 0; i < 16u; i++)
         if (off_on[i] && (int32_t)(fm1_ms - off_at[i]) >= 0) {
-            midi_out(0x80u | off_ch[i], off_note[i], 0);
-            off_on[i] = 0;
+            if (note_is_down(off_ch[i], off_note[i])) off_at[i] = fm1_ms + 40u;
+            else {
+                midi_out(0x80u | off_ch[i], off_note[i], 0);
+                off_on[i] = 0;
+            }
         }
+}
+static uint32_t hit_vel(uint32_t sensed) {
+#if BOARD_SMK37
+    if (!sensed || sensed > 127u) return 100u;
+    return sensed;
+#else
+    (void)sensed;
+    if ((fm1_in.buttons & (1u << BTN_OCT_DOWN)) && !(fm1_in.buttons & (1u << BTN_OCT_UP)))
+        return 40u;
+    if ((fm1_in.buttons & (1u << BTN_OCT_UP)) && !(fm1_in.buttons & (1u << BTN_OCT_DOWN)))
+        return 127u;
+    return 100u;
+#endif
+}
+static void key_note_on(uint32_t k, uint32_t ch, uint32_t note, uint32_t vel) {
+    if (k >= 27u || !note || note > 127u || !vel) return;
+    if (vel > 127u) vel = 127u;
+    down_note[k] = (uint8_t)note;
+    down_ch[k] = (uint8_t)ch;
+    down_count++;
+    cancel_off(ch, note);
+    midi_out(0x90u | ch, note, vel);
+    menv_trig(1);
+}
+static void key_note_off(uint32_t k) {
+    uint32_t note, ch;
+    if (k >= 27u || !down_note[k]) return;
+    note = down_note[k];
+    ch = down_ch[k];
+    down_note[k] = 0;
+    if (down_count) down_count--;
+    if (!note_is_down(ch, note)) {
+        cancel_off(ch, note);
+        midi_out(0x80u | ch, note, 0);
+    }
+    menv_release();
 }
 static uint32_t out_ch(void) { return set.ch ? (uint32_t)set.ch - 1u : 0u; }
 static uint32_t kit_ch(uint32_t ki) {
@@ -1655,16 +1914,16 @@ static int find_lane(uint32_t midi_ch, uint32_t note, uint32_t *ki_out) {
     return -1;
 }
 
-static void request_lane(uint32_t ki, uint32_t lane, uint32_t vel, int record) {
+static uint32_t request_lane(uint32_t ki, uint32_t lane, uint32_t vel, int record, int hold) {
     uint32_t note, g, model, eng, ch, w, r;
-    if (ki >= NKIT || lane >= NLANE || !vel) return;
+    if (ki >= NKIT || lane >= NLANE || !vel) return 0;
     if (vel > 127u) vel = 127u;
     note = set.kit[ki].note[lane];
-    if (!note) return;
+    if (!note) return 0;
     if (note > 127u) note = 36u;
     model = set.kit[ki].model[lane];
     if (model > 3u) model = 1u;
-    eng = set.kit[ki].engine & 3u;
+    eng = kit_eng(ki);
     g = kit_gain(ki, lane);
     if (g) {
         w = pend_w;
@@ -1683,10 +1942,12 @@ static void request_lane(uint32_t ki, uint32_t lane, uint32_t vel, int record) {
         }
     }
     ch = kit_ch(ki);
-    midi_out(0x90u | ch, note, vel);
-    note_off_later(ch, note, 70u);
+    if (!hold) {
+        midi_out(0x90u | ch, note, vel);
+        note_off_later(ch, note, 70u);
+        menv_trig(0);
+    }
     if (ki == trk()) take_push(128u + lane, vel);
-    menv_trig(0);
     if (record && rec && seq_run) {
         uint8_t s = seq_pos, len = set.length, p = (uint8_t)pat_now();
         if (len < 1u) len = 1u;
@@ -1696,6 +1957,7 @@ static void request_lane(uint32_t ki, uint32_t lane, uint32_t vel, int record) {
             paint_req = 1;
         }
     }
+    return note;
 }
 
 static uint32_t take_median(void) {
@@ -1835,40 +2097,59 @@ static void take_commit(void) {
     message_take(bpm, bars);
 }
 
-static uint8_t held[16], nheld, played[16], nplayed;
+static uint8_t held[16], held_vel[16], nheld, played[16], played_vel[16], nplayed;
 static uint8_t arp_idx, arp_oct_i, arp_dir = 1, arp_on, arp_notes[8], arp_nn;
 static uint32_t arp_next, arp_off;
-static void held_add(uint8_t note) {
+static int tone_local(void) { return !kit_midi(trk()); }
+static uint32_t arp_ch(void) { return kit_ch(trk()); }
+static void held_add(uint8_t note, uint8_t vel) {
     uint32_t i;
-    for (i = 0; i < nheld; i++) if (held[i] == note) return;
+    if (!vel) vel = 100;
+    for (i = 0; i < nheld; i++) if (held[i] == note) { held_vel[i] = vel; return; }
     if (nheld >= 16u) return;
     i = nheld;
-    while (i && held[i - 1u] > note) { held[i] = held[i - 1u]; i--; }
+    while (i && held[i - 1u] > note) {
+        held[i] = held[i - 1u];
+        held_vel[i] = held_vel[i - 1u];
+        i--;
+    }
     held[i] = note;
+    held_vel[i] = vel;
     nheld++;
 }
 static void held_del(uint8_t note) {
     uint32_t i, j;
     for (i = 0; i < nheld; i++) if (held[i] == note) {
-        for (j = i + 1u; j < nheld; j++) held[j - 1u] = held[j];
+        for (j = i + 1u; j < nheld; j++) {
+            held[j - 1u] = held[j];
+            held_vel[j - 1u] = held_vel[j];
+        }
         nheld--;
         return;
     }
 }
-static void played_add(uint8_t note) {
+static void played_add(uint8_t note, uint8_t vel) {
     uint32_t i;
-    for (i = 0; i < nplayed; i++) if (played[i] == note) return;
-    if (nplayed < 16u) played[nplayed++] = note;
+    if (!vel) vel = 100;
+    for (i = 0; i < nplayed; i++) if (played[i] == note) { played_vel[i] = vel; return; }
+    if (nplayed < 16u) {
+        played[nplayed] = note;
+        played_vel[nplayed] = vel;
+        nplayed++;
+    }
 }
 static void played_del(uint8_t note) {
     uint32_t i, j;
     for (i = 0; i < nplayed; i++) if (played[i] == note) {
-        for (j = i + 1u; j < nplayed; j++) played[j - 1u] = played[j];
+        for (j = i + 1u; j < nplayed; j++) {
+            played[j - 1u] = played[j];
+            played_vel[j - 1u] = played_vel[j];
+        }
         nplayed--;
         return;
     }
 }
-static void note_hold(uint8_t note) { held_add(note); played_add(note); }
+static void note_hold(uint8_t note, uint8_t vel) { held_add(note, vel); played_add(note, vel); }
 static void note_drop(uint8_t note) {
     if (set.arp_latch) return;
     held_del(note);
@@ -1877,16 +2158,17 @@ static void note_drop(uint8_t note) {
 static void arp_stop(void) {
     uint32_t i;
     for (i = 0; i < arp_nn; i++) {
-        tone_stop(arp_notes[i]);
-        midi_out(0x80u | out_ch(), arp_notes[i], 0);
+        if (tone_local()) tone_stop(arp_notes[i]);
+        midi_out(0x80u | arp_ch(), arp_notes[i], 0);
     }
     arp_nn = 0;
     arp_on = 0;
 }
-static void arp_fire(uint32_t note) {
-    if (note > 127u || arp_nn >= 8u) return;
-    tone_start(note, 108u);
-    midi_out(0x90u | out_ch(), note, 108u);
+static void arp_fire(uint32_t note, uint32_t vel) {
+    if (note > 127u || arp_nn >= 8u || !vel) return;
+    if (vel > 127u) vel = 127u;
+    if (tone_local()) tone_start(note, vel);
+    midi_out(0x90u | arp_ch(), note, vel);
     arp_notes[arp_nn++] = (uint8_t)note;
     arp_on = 1;
 }
@@ -1914,7 +2196,7 @@ static void arp_run(void) {
         arp_stop();
         for (o = 0; o < octs; o++)
             for (i = 0; i < nheld && arp_nn < 4u; i++)
-                arp_fire((uint32_t)held[i] + 12u * o);
+                arp_fire((uint32_t)held[i] + 12u * o, held_vel[i] ? held_vel[i] : 100u);
         arp_off = fm1_ms + iv * gate / 100u;
         return;
     }
@@ -1941,7 +2223,7 @@ static void arp_run(void) {
     if (arp_idx >= nsrc) arp_idx = 0;
     note = (uint32_t)src[arp_idx] + 12u * arp_oct_i;
     arp_stop();
-    arp_fire(note);
+    arp_fire(note, (src == played ? played_vel : held_vel)[arp_idx]);
     arp_off = fm1_ms + iv * gate / 100u;
 }
 
@@ -2034,7 +2316,7 @@ static void clamp_set(void) {
         if (set.kit[i].map >= NMAP) set.kit[i].map = 0;
         if (set.kit[i].bank > 1u) set.kit[i].bank = 0;
         if (set.kit[i].ch < 1u || set.kit[i].ch > 16u) set.kit[i].ch = (uint8_t)(10u + i);
-        set.kit[i].engine = (uint8_t)(set.kit[i].engine & 0x83u);
+        set.kit[i].engine = (uint8_t)((set.kit[i].engine & 0x80u) | eng_ix(set.kit[i].engine));
         if (set.kit[i].scale > 5u) set.kit[i].scale = 0;
         if (set.kit[i].root > 11u) set.kit[i].root = 0;
         if (set.kit[i].level > 100u) set.kit[i].level = 100;
@@ -2192,18 +2474,18 @@ static void midi_in(void) {
             uint32_t ki, k, drumch = 0;
             int lane = find_lane(ch, d1, &ki);
             for (k = 0; k < NKIT; k++) if (kit_ch(k) == ch) drumch = 1;
-            if (ty == 0x90u && d2 && lane >= 0) request_lane(ki, (uint32_t)lane, d2, 1);
+            if (ty == 0x90u && d2 && lane >= 0) request_lane(ki, (uint32_t)lane, d2, 1, 0);
             if (lane >= 0 || drumch) continue;
         }
         if (set.ch && ch != (uint32_t)set.ch - 1u) continue;
         if (ty == 0x90u && d2) {
             take_push(d1, d2);
             menv_trig(1);
-            if (set.arp_mode && page != PG_SEQ && page != PG_EDIT) note_hold(d1);
-            else tone_start(d1, d2);
+            if (set.arp_mode && page != PG_SEQ && page != PG_EDIT) note_hold(d1, d2);
+            else if (tone_local()) tone_start(d1, d2);
         } else if (ty == 0x80u || ty == 0x90u) {
             if (set.arp_mode) note_drop(d1);
-            tone_stop(d1);
+            if (tone_local()) tone_stop(d1);
             menv_release();
         }
     }
@@ -2364,22 +2646,22 @@ static uint32_t scale_note(uint32_t ki, uint32_t key, uint32_t piano) {
 }
 static void scale_on(uint32_t ki, uint32_t note, uint32_t vel) {
     if (!note || note > 127u || !vel) return;
-    if (vel > 127u) vel = 127u;
-    midi_out(0x90u | kit_ch(ki), note, vel);
     if (ki == trk()) take_push(note, vel);
-    menv_trig(1);
 }
 
 static void app_main(void) {
     uint32_t prev = 0, k, rel, seen_gen = 0, clear_arm = 0;
-    uint8_t down_note[27];
 #if BOARD_SMK37
-    uint8_t ext_note[FM1_NKEY];
+    uint8_t ext_note[FM1_NKEY], pad_note[16];
     smk_pw_t wheel = {0};
+    uint16_t bend_msb = 64;
+    uint8_t bend_live = 0;
     smk_pad_events = 1;
+    for (k = 0; k < FM1_NKEY; k++) ext_note[k] = 0;
+    for (k = 0; k < 16u; k++) pad_note[k] = 0;
 #endif
-    for (k = 0; k < 27u; k++) down_note[k] = 0;
     palette_set(1);
+    bake_pcm();
     if (settings_load((void *)&set, sizeof set) || set.ver != SET_VER) defaults();
     else clamp_set();
     keys_init();
@@ -2425,10 +2707,9 @@ static void app_main(void) {
         prev = keys;
         base = (uint32_t)(53 + 12 * (int32_t)set.oct);
         for (k = 0; k < 27u; k++) {
-            uint32_t vel = 100;
+            uint32_t vel = hit_vel(100u);
 #if BOARD_SMK37
-            vel = fm1_in.key_vel[SMK_KEY_F3 + k];
-            if (!vel) vel = 100;
+            vel = hit_vel(fm1_in.key_vel[SMK_KEY_F3 + k]);
 #endif
             if (down >> k & 1u) {
                 uint32_t note = base + k;
@@ -2436,43 +2717,50 @@ static void app_main(void) {
                 if (note > 127u) note = 127u;
                 if (page == PG_ARP) {
                     down_note[k] = (uint8_t)note;
+                    down_ch[k] = (uint8_t)arp_ch();
                     down_count++;
                     menv_trig(1);
-                    if (set.arp_mode) note_hold((uint8_t)note);
-                    else { tone_start(note, vel); midi_out(0x90u | out_ch(), note, vel); }
+                    if (set.arp_mode) note_hold((uint8_t)note, (uint8_t)vel);
+                    else {
+                        if (tone_local()) tone_start(note, vel);
+                        midi_out(0x90u | arp_ch(), note, vel);
+                    }
                 } else if (grid && white_ord[k] != 255u && white_ord[k] < set.length) {
                     uint8_t w = white_ord[k];
                     uint32_t tr = trk(), lane = lane_now();
                     uint8_t *cell = (uint8_t *)&set.vel[pat_now()][tr][lane][w];
                     cursor = w;
                     *cell = *cell ? 0 : 100;
-                    if (*cell) request_lane(tr, lane, 100, 0);
+                    if (*cell) request_lane(tr, lane, 100, 0, 0);
                     dirty = 1;
                     t_change = fm1_ms;
                     paint_req = 1;
                 } else if (grid && black_ord[k] < NLANE) {
                     set.lane = black_ord[k];
-                    request_lane(trk(), set.lane, vel, 1);
+                    request_lane(trk(), set.lane, vel, 1, 0);
                     dirty = 1;
                     t_change = fm1_ms;
                     paint_req = 1;
                 } else if (!grid) {
                     uint32_t tr = trk(), sn = scale_note(tr, k, note);
                     if (sn) {
-                        down_note[k] = (uint8_t)sn;
                         scale_on(tr, sn, vel);
-                    } else request_lane(tr, KEY_LANE[note % 12u], vel, 1);
+                        key_note_on(k, kit_ch(tr), sn, vel);
+                    } else {
+                        uint32_t played = request_lane(tr, lane_for_key(tr, k), vel, 1, 1);
+                        if (played) key_note_on(k, kit_ch(tr), played, vel);
+                    }
                 }
             }
             if ((up >> k & 1u) && down_note[k]) {
                 if (page == PG_ARP) {
                     if (down_count) down_count--;
                     if (set.arp_mode) note_drop(down_note[k]);
-                    tone_stop(down_note[k]);
-                    midi_out(0x80u | out_ch(), down_note[k], 0);
-                } else midi_out(0x80u | kit_ch(trk()), down_note[k], 0);
-                down_note[k] = 0;
-                menv_release();
+                    if (tone_local()) tone_stop(down_note[k]);
+                    midi_out(0x80u | arp_ch(), down_note[k], 0);
+                    down_note[k] = 0;
+                    menv_release();
+                } else key_note_off(k);
             }
         }
 #if BOARD_SMK37
@@ -2485,21 +2773,28 @@ static void app_main(void) {
                 ext_note[key] = (uint8_t)note;
                 if (page == PG_ARP) {
                     menv_trig(1);
-                    if (set.arp_mode) note_hold((uint8_t)note);
-                    else { tone_start(note, vel); midi_out(0x90u | out_ch(), note, vel); }
+                    if (set.arp_mode) note_hold((uint8_t)note, (uint8_t)vel);
+                    else {
+                        if (tone_local()) tone_start(note, vel);
+                        midi_out(0x90u | arp_ch(), note, vel);
+                    }
                 } else if (!(page == PG_SEQ && seq_view == VW_GRID)) {
-                    uint32_t sn = scale_note(trk(), key, note);
+                    uint32_t sn = scale_note(trk(), key, note), played = sn;
                     if (sn) scale_on(trk(), sn, vel);
-                    else request_lane(trk(), KEY_LANE[note % 12u], vel, 1);
-                    ext_note[key] = (uint8_t)(sn ? sn : note);
+                    else played = request_lane(trk(), lane_for_note(trk(), note), vel, 1, 1);
+                    if (played) {
+                        ext_note[key] = (uint8_t)played;
+                        midi_out(0x90u | kit_ch(trk()), played, vel);
+                        menv_trig(1);
+                    } else ext_note[key] = 0;
                 }
             } else if (ext_note[key]) {
                 if (page == PG_ARP) {
                     if (set.arp_mode) note_drop(ext_note[key]);
-                    tone_stop(ext_note[key]);
-                    midi_out(0x80u | out_ch(), ext_note[key], 0);
+                    if (tone_local()) tone_stop(ext_note[key]);
+                    midi_out(0x80u | arp_ch(), ext_note[key], 0);
                     menv_release();
-                } else if (set.kit[trk()].scale) {
+                } else {
                     midi_out(0x80u | kit_ch(trk()), ext_note[key], 0);
                     menv_release();
                 }
@@ -2508,11 +2803,30 @@ static void app_main(void) {
         }
         while ((e = smk_pad_take()) >= 0) {
             uint32_t pad = ((uint32_t)e >> 8) & 15u, vel = (uint32_t)e & 0x7Fu;
-            if (vel) request_lane(trk(), pad & 7u, vel, 1);
+            if (vel) {
+                uint32_t played = request_lane(trk(), pad & 7u, vel, 1, 1);
+                if (played) {
+                    pad_note[pad] = (uint8_t)played;
+                    midi_out(0x90u | kit_ch(trk()), played, vel);
+                }
+            } else if (pad_note[pad]) {
+                midi_out(0x80u | kit_ch(trk()), pad_note[pad], 0);
+                pad_note[pad] = 0;
+                menv_release();
+            }
         }
         {
             int32_t bd = smk_pw_bend(&wheel, fm1_in.wheel[0], fm1_ms);
+            int32_t pb;
             bend_q16 = (uint32_t)(65536 + (bd * 3785 >> 12) + (((bd * bd) >> 12) * 109 >> 12));
+            pb = 8192 + bd;
+            if (pb < 0) pb = 0;
+            if (pb > 16383) pb = 16383;
+            if (bd) bend_live = 1;
+            if (bend_live && (uint32_t)(pb >> 7) != bend_msb) {
+                bend_msb = (uint16_t)(pb >> 7);
+                midi_out(0xE0u | kit_ch(trk()), (uint32_t)pb & 127u, bend_msb);
+            }
         }
 #endif
 
@@ -2550,7 +2864,7 @@ static void app_main(void) {
             t_change = fm1_ms;
             paint_req = 1;
             if (e & 0x80u) message("MIDI SILENT");
-            else message(ENGMSG[e & 3u]);
+            else message(ENGMSG[eng_ix(e)]);
         } else if (pg == PG_ARP && page == PG_ARP) {
             set.arp_latch ^= 1u;
             if (!set.arp_latch) { nheld = 0; nplayed = 0; arp_stop(); }
@@ -2620,7 +2934,7 @@ static void app_main(void) {
                     if (set.vel[pat_now()][trk()][lane][w]) glow = 1;
                     if (seq_run && w == seq_pos) { on = 1; glow = 0; }
                 } else if (black_ord[k] == lane) glow = 1;
-            } else if (page != PG_ARP && (base + k) % 12u < 8u) glow = 1;
+            } else if (page != PG_ARP && !set.kit[trk()].scale && drum_key_lit(trk(), k)) glow = 1;
             fm1_led_key(KEY_LED(k), on || (down_note[k] && voice[0].stage));
             fm1_led_key_glow(KEY_LED(k), glow && !on);
         }

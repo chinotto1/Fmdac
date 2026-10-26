@@ -1,8 +1,10 @@
-# Fmdac 0.9. K1 on a MIDI kit reaches the AUv3 app maps after the seven original charts.
-# GM8 is index 18: D# is lane 4, mid tom 47, channel 10.
-# HAMR2 is index 20: F# is lane 2, clap 39, the app row order.
-# RUIS is index 32: C is kick 49.
-# VA909 is index 39: page 2 lane 0 is note 60. Lane 3 is empty and sends nothing.
+# Fmdac 0.13. K1 on a MIDI kit reaches the AUv3 app maps after the seven original charts.
+# Off the grid a key is a General MIDI drum note, then the lane with that role.
+# GM8 is index 18: D#4 is the clap, note 39, channel 10.
+# HAMR2 is index 20: F#3 folds to the closed hat, note 42, channel 1.
+# RUIS is index 32: C4 is the kick, note 49, channel 1.
+# VA909 is index 39, page 2: no kick lane, so C4 uses the fallback lane, note 60.
+# E4 is a snare. Page 2 has no snare, so the fallback lane sends note 61.
 40 btn 8
 80 btn 8
 120 btn 6

@@ -1,0 +1,6 @@
+# Fmdac 0.13. ARP on a drum kit still plays the sine, same MIDI notes.
+40 btn 10
+80 enc 2 1
+400 keys 128
+900 keys 0
+1200 end
