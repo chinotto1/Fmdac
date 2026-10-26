@@ -1,45 +1,44 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Fmdac 0.8. Four kit tracks, a sequencer, and the converter.
+/* Fmdac 0.9. Four kit tracks, a sequencer, and the converter.
  *
  *   FX     machine, bits, rate, tone. Press FX again: wet, drive, bits, rate.
  *          The law is on the headphones. While a computer streams USB audio,
- *          that stream is mixed in and converted too. USB audio also records
- *          the headphone mix.
- *   HOME   the level of each kit track, T1 to T4. Press HOME again to
- *          change that track's drum character: 808, 909, CR78, SDS.
- *          These are synthesized, not sample ROMs.
- *   A track is a whole kit, eight lanes, like a Skiff drum track.
- *   SELECT picks the kit. All four kits play together.
+ *          that stream is mixed in and converted too. 48 kHz playback is
+ *          resampled to the headphone clock. USB audio also records the mix.
+ *   HOME   the level of each kit, T1 to T4. The selected kit is marked.
+ *          Press HOME again: that kit becomes MIDI, or a drum machine.
+ *          A MIDI kit sends notes and stays silent here. SEL then opens
+ *          its map list. A drum kit is a synthesized 808, 909, CR78, or
+ *          SDS, not a sample ROM. SEL then opens that list of machines.
+ *   SELECT picks the kit. SELECT moves inside a list. SEL picks.
+ *          HOME closes a list and leaves the kit as it was.
  *   GRID   SEQ. White keys are the 16 steps of the lane. A black key
- *          picks a lane and plays it. K4 is the lane. Off the grid,
- *          the keys play the kit: C kick, D snare, F# closed hat.
- *          Press SEQ again for SONG.
+ *          picks a lane and plays it. K4 is the lane. Off the grid, a
+ *          drum kit plays C kick, D snare, F# closed hat. A MIDI kit
+ *          whose scale is not MAP plays that scale, and the note holds
+ *          until the key comes up. Press SEQ again for SONG.
  *   SONG   16 slots. K1 picks the slot, K2 the pattern, K3 the length.
  *          PLAY walks the chain when the length is more than one.
- *   EDIT   tune, decay, snap, drop of the lane. Press EDIT again: the
- *          notes of four lanes. Press EDIT again: this kit's map.
- *          K1 keeps GM, TR-909, TR-707, TR-727, TR-08, Volca Beats, and
- *          the grouped Hammerhead list, then the AUv3 app maps from the
- *          OCTACHRON list. SEL opens that same list on any page. SELECT
- *          moves, SEL picks, and HOME closes it without changing the kit.
- *          The app notes are the public chart that matches the lists its
- *          author posted. A blank lane sends nothing. OneShot and Tekno
- *          have no fixed published chart. This is not every preset stored
- *          inside the OCTACHRON app.
+ *   EDIT   a drum kit: tune, decay, tone, drop, then the lane levels.
+ *          A MIDI kit: the scale and root, then the lane notes, then
+ *          the map. K1 on the map page keeps GM, TR-909, TR-707, TR-727,
+ *          TR-08, Volca Beats, and Hammerhead, then the AUv3 app maps.
+ *          A blank lane sends nothing. OneShot and Tekno have no fixed
+ *          published chart. This is not every preset in the OCTACHRON app.
  *   ARP    up, down, up-down, random, chord, and as-played. Press ARP again
  *          to latch the held keys. The keys play the sine only on this page.
  *   LFO    MIDI CC, and level or tune on this mix when DEST says so.
  *   ENV    attack, decay, sustain, release of the key tone. Press ENV again:
  *          a MIDI CC envelope on each new note.
  *   GLO    tempo, swing, length, MIDI channel. OCT+ twice clears this kit.
- *   REC while stopped quantizes the last few seconds of this kit into the
- *   pattern and sets the tempo. REC while playing overdubs the playhead.
- *   PLAY then plays that quantized pattern. It is not a free looper.
- *   Tracks: T1 T2 T3 T4. Each is a whole kit: eight lanes, its own map,
- *   MIDI channel, level, and drum character. SELECT changes the kit.
- *   SEL opens the map list. The list is not stored.
- *   All four play together. The sounding drums are four voices, one per
- *   kind of hit, shared by the kits. A second kick retriggers the first.
+ *   REC while stopped quantizes what this kit just played. It tries one,
+ *   two, and four bars, keeps the tempo closest to the current one, and
+ *   writes across the patterns that are left. Four patterns is as long
+ *   as a take gets. REC while playing overdubs the playhead.
+ *   Tracks: T1 T2 T3 T4. All four play together. The sounding drums are
+ *   four voices, one per kind of hit, shared by the kits. A MIDI kit
+ *   does not use those voices. A saved song from 0.8 loads as the
+ *   factory kits, because a pattern can now store a MIDI pitch.
  *
  * Integers only. No float, no 64-bit division. Converter coefficients are
  * cast_tab.h, baked on a computer by tools/bake_cast.c. */
@@ -60,7 +59,7 @@ static int uac_play_on(void) { return 0; }
 static int uac_play_frame(int32_t *l, int32_t *r) { *l = 0; *r = 0; return 0; }
 #endif
 
-#define SET_VER 6u
+#define SET_VER 7u
 #define NKIT 4u
 #define NLANE 8u
 #define NPAT 4u
@@ -69,10 +68,11 @@ enum { VW_GRID, VW_SONG };
 
 typedef struct {
     uint8_t map, bank, ch, engine, level;
+    uint8_t scale, root;            /* scale 0 plays the lanes; bit 7 of engine is MIDI */
     uint8_t note[8];
     uint8_t lvl[8];
     uint8_t model[8];               /* 0 kick, 1 snare, 2 hat, 3 tom */
-    uint8_t parm[8][4];             /* tune, decay, snap, drop */
+    uint8_t parm[8][4];             /* tune, decay, tone, drop */
 } Trk;
 typedef struct {
     uint8_t ver;
@@ -88,6 +88,7 @@ typedef struct {
     uint8_t song_len;
     Trk kit[NKIT];
     uint8_t vel[NPAT][NKIT][NLANE][16];
+    uint8_t pit[NPAT][NKIT][16];    /* MIDI pitch for lane 0; 0 uses the map note */
 } Set;
 typedef char set_fits[(sizeof(Set) <= 4000u) ? 1 : -1];
 
@@ -132,8 +133,7 @@ static const char *lname[NKIT][NLANE];
 static const uint8_t KEY_LANE[12] = {0, 6, 1, 4, 3, 5, 2, 7, 0, 1, 4, 3};
 static const char *const ENG[4] = {"808", "909", "CR78", "SDS"};
 static const char *const ENGMSG[4] = {"ENGINE 808", "ENGINE 909", "ENGINE CR78", "ENGINE SDS"};
-static const char *const ENGNXT[4] = {
-    "PRESS HOME FOR 909", "PRESS HOME FOR CR78", "PRESS HOME FOR SDS", "PRESS HOME FOR 808"};
+static const char *const SCALE_N[6] = {"MAP", "CHROM", "MAJOR", "MINOR", "PENTA", "DORIAN"};
 static const char *const MODE[7] = {"OFF", "UP", "DOWN", "UP-DN", "RAND", "CHORD", "ORDER"};
 static const char *const DIVN[4] = {"1/4", "1/8", "1/16", "1/32"};
 static const char *const DEST[3] = {"OFF", "TUNE", "LEVEL"};
@@ -358,6 +358,14 @@ static uint8_t model_of(const char *s) {
 }
 static const MapDef *map_of(uint32_t ix) { return &MAPS[ix < NMAP ? ix : 0u]; }
 static uint32_t trk(void) { return set.track < NKIT ? set.track : 0u; }
+static int kit_midi(uint32_t ki) {
+    if (ki >= NKIT) ki = 0;
+    return (set.kit[ki].engine & 0x80u) != 0;
+}
+static uint32_t kit_eng(uint32_t ki) {
+    if (ki >= NKIT) ki = 0;
+    return set.kit[ki].engine & 3u;
+}
 static uint32_t lane_now(void) { return set.lane < NLANE ? set.lane : 0u; }
 static uint32_t pat_now(void) { return set.pattern < NPAT ? set.pattern : 0u; }
 static const char *trk_name(uint32_t tr) { return KITN[tr < NKIT ? tr : 0u]; }
@@ -393,6 +401,11 @@ static void apply_map(uint32_t ki) {
         lname[ki][i] = labs[i];
         set.kit[ki].note[i] = notes[i];
         set.kit[ki].model[i] = model_of(labs[i]);
+    }
+    {
+        uint32_t p, s;
+        for (p = 0; p < NPAT; p++)
+            for (s = 0; s < 16u; s++) set.pit[p][ki][s] = 0;
     }
 }
 
@@ -436,6 +449,11 @@ static uint32_t put_u_at(char *d, uint32_t n, uint32_t i, uint32_t v) {
     put_u(b, 12, v);
     return put_str(d, n, i, b);
 }
+static void oct_text(char *d, int v) {
+    uint32_t n = 0;
+    if (v < 0) { d[n++] = '-'; v = -v; }
+    put_u(d + n, 12u - n, (uint32_t)v);
+}
 static void note_text(char *d, uint32_t note) {
     uint32_t n, oct;
     if (!note || note > 127u) { put_str(d, 12, 0, "REST"); return; }
@@ -465,6 +483,7 @@ static Drum drumv[4];
 static uint32_t kit_gain(uint32_t ki, uint32_t lane) {
     uint32_t lv, ll;
     if (ki >= NKIT || lane >= NLANE) return 0;
+    if (set.kit[ki].engine & 0x80u) return 0;
     lv = set.kit[ki].level;
     ll = set.kit[ki].lvl[lane];
     if (lv > 100u) lv = 100u;
@@ -597,8 +616,7 @@ static void render_step(void) {
     if (len > 16u) len = 16u;
     if (step_i >= len) step_i = 0;
     for (ki = 0; ki < NKIT; ki++) {
-        uint32_t eng = set.kit[ki].engine, ch = set.kit[ki].ch;
-        if (eng > 3u) eng = 0;
+        uint32_t eng = set.kit[ki].engine & 3u, ch = set.kit[ki].ch;
         if (ch < 1u || ch > 16u) ch = 10u + ki;
         for (lane = 0; lane < NLANE; lane++) {
             uint8_t v = *(volatile uint8_t *)&set.vel[p][ki][lane][step_i];
@@ -606,6 +624,10 @@ static void render_step(void) {
             if (!v) continue;
             if (v > 127u) v = 127u;
             note = set.kit[ki].note[lane];
+            if ((set.kit[ki].engine & 0x80u) && !lane) {
+                uint8_t pv = *(volatile uint8_t *)&set.pit[p][ki][step_i];
+                if (pv && pv < 128u) note = pv;
+            }
             if (!note) continue;
             if (note > 127u) note = 36u;
             if (n < 16u) {
@@ -917,7 +939,7 @@ static void fx_apply(int reset_state) {
 }
 
 static uint8_t paint_req = 1, hint_req, skip_keys;
-static uint8_t list_on, list_sel, list_top;
+static uint8_t list_on, list_sel, list_top, list_kind;
 static const char *msg;
 static uint32_t msg_until;
 static char msgbuf[24];
@@ -933,10 +955,14 @@ static void message(const char *s) {
     hint_req = 1;
 }
 static int msg_on(void) { return msg && (int32_t)(fm1_ms - msg_until) < 0; }
-static void message_take(uint32_t bpm) {
+static void message_take(uint32_t bpm, uint32_t bars) {
     uint32_t n = put_str(msgbuf, 24, 0, "TAKE ");
     n = put_u_at(msgbuf, 24, n, bpm);
-    put_str(msgbuf, 24, n, " BPM");
+    if (bars > 1u) {
+        n = put_str(msgbuf, 24, n, " ");
+        n = put_u_at(msgbuf, 24, n, bars);
+        put_str(msgbuf, 24, n, "BAR");
+    } else put_str(msgbuf, 24, n, " BPM");
     message(msgbuf);
 }
 static void message_step(uint32_t step, uint32_t note) {
@@ -1018,10 +1044,15 @@ static void fill_rows(void) {
         uint32_t i;
         for (i = 0; i < NKIT; i++) {
             char k[3] = {'K', (char)('1' + i), 0};
+            char name[16];
+            uint32_t n = put_str(name, 16, 0, KITN[i]);
+            n = put_str(name, 16, n, " ");
+            if (kit_midi(i)) put_str(name, 16, n, "MIDI");
+            else put_str(name, 16, n, ENG[kit_eng(i)]);
             num(n0, set.kit[i].level);
-            row_set(i, k, KITN[i], n0, (int)set.kit[i].level, 0, 100);
+            row_set(i, k, name, n0, (int)set.kit[i].level, 0, 100);
         }
-    } else if (page == PG_EDIT && edit_alt == 2u) {
+    } else if (page == PG_EDIT && kit_midi(tr) && edit_alt == 2u) {
         const MapDef *k = map_of(set.kit[tr].map);
         uint32_t lane = lane_now(), note = set.kit[tr].note[lane];
         note_text(n2, note);
@@ -1030,15 +1061,31 @@ static void fill_rows(void) {
         row_set(1, "K2", "PAGE", set.kit[tr].bank ? "2" : "1", (int)set.kit[tr].bank, 0, k->b ? 1 : 0);
         row_set(2, "K3", lane_name(tr, lane), n2, (int)note, 0, 127);
         row_set(3, "K4", "CHANNEL", n3, (int)set.kit[tr].ch, 1, 16);
-    } else if (page == PG_EDIT && edit_alt) {
+    } else if (page == PG_EDIT && kit_midi(tr) && edit_alt) {
         uint32_t i, base = lane_now() & 4u;
         for (i = 0; i < 4u; i++) {
             char k[3] = {'K', (char)('1' + i), 0};
             note_text(n0, set.kit[tr].note[base + i]);
             row_set(i, k, lane_name(tr, base + i), n0, (int)set.kit[tr].note[base + i], 0, 127);
         }
+    } else if (page == PG_EDIT && kit_midi(tr)) {
+        uint32_t sc = set.kit[tr].scale > 5u ? 0u : set.kit[tr].scale;
+        uint32_t root = set.kit[tr].root > 11u ? 0u : set.kit[tr].root;
+        ch_text(n2, set.kit[tr].ch);
+        oct_text(n3, (int)set.oct);
+        row_set(0, "K1", "SCALE", SCALE_N[sc], (int)sc, 0, 5);
+        row_set(1, "K2", "ROOT", NTN[root], (int)root, 0, 11);
+        row_set(2, "K3", "CHANNEL", n2, (int)set.kit[tr].ch, 1, 16);
+        row_set(3, "K4", "OCTAVE", n3, (int)set.oct, -2, 2);
+    } else if (page == PG_EDIT && edit_alt) {
+        uint32_t i, base = lane_now() & 4u;
+        for (i = 0; i < 4u; i++) {
+            char k[3] = {'K', (char)('1' + i), 0};
+            num(n0, set.kit[tr].lvl[base + i]);
+            row_set(i, k, lane_name(tr, base + i), n0, (int)set.kit[tr].lvl[base + i], 0, 100);
+        }
     } else if (page == PG_EDIT) {
-        static const char *NM[4] = {"TUNE", "DECAY", "SNAP", "DROP"};
+        static const char *NM[4] = {"TUNE", "DECAY", "TONE", "DROP"};
         uint32_t i, lane = lane_now();
         for (i = 0; i < 4u; i++) {
             char k[3] = {'K', (char)('1' + i), 0};
@@ -1127,12 +1174,18 @@ static void fill_seq(void) {
 
 static void draw_big(uint32_t i, uint32_t y) {
     uint32_t fill = bar_fill(barv[i], barlo[i], barhi[i], 104);
-    uint16_t vc = (hot == i) ? C_WHITE : C_HI;
+    int home = page == PG_HOME && i == trk();
+    uint16_t vc = (hot == i || home) ? C_WHITE : C_HI;
+    int x = home ? 14 : 8;
     cv_begin(240, 48, C_BLACK);
-    cv_text(8, 0, &FONT_S, lab[i], C_GRAY);
+    if (home) {
+        cv_rect(0, 0, 6, 48, C_HI);
+        cv_rect(234, 0, 6, 48, C_HI);
+    }
+    cv_text(x, 0, &FONT_S, lab[i], home ? C_WHITE : C_GRAY);
     cv_rect(124, 4, 104, 8, C_DIM);
     if (fill) cv_rect(124, 4, (int32_t)fill, 8, vc);
-    cv_text(8, 16, &FONT_L, val[i], vc);
+    cv_text(x, 16, &FONT_L, val[i], vc);
     cv_blit(0, y);
 }
 static void draw_small(uint32_t i, uint32_t y) {
@@ -1193,14 +1246,16 @@ static void draw_song(void) {
 static void header_text(char *d) {
     const char *name = "FX";
     uint32_t n, tr = trk();
-    if (list_on) name = "MAPS";
+    if (list_on) name = list_kind ? "DRUMS" : "MAPS";
     else if (page == PG_FX && fx_alt) name = "WET";
     else if (page == PG_HOME) name = "HOME";
     else if (page == PG_SEQ && seq_view == VW_SONG) name = "SONG";
     else if (page == PG_SEQ) name = "GRID";
-    else if (page == PG_EDIT && edit_alt == 2u) name = "MAP";
-    else if (page == PG_EDIT && edit_alt) name = "NOTE";
-    else if (page == PG_EDIT) name = "EDIT";
+    else if (page == PG_EDIT && kit_midi(tr) && edit_alt == 2u) name = "MAP";
+    else if (page == PG_EDIT && kit_midi(tr) && edit_alt) name = "NOTE";
+    else if (page == PG_EDIT && kit_midi(tr)) name = "SCALE";
+    else if (page == PG_EDIT && edit_alt) name = "LEVEL";
+    else if (page == PG_EDIT) name = "KIT";
     else if (page == PG_ARP) name = "ARP";
     else if (page == PG_LFO) name = "LFO";
     else if (page == PG_ENV && env_alt) name = "CC";
@@ -1209,10 +1264,13 @@ static void header_text(char *d) {
     n = put_str(d, 40, 0, " ");
     n = put_str(d, 40, n, name);
     if (!list_on && page == PG_HOME) {
-        uint32_t eng = set.kit[tr].engine;
         n = put_str(d, 40, n, " ");
-        n = put_str(d, 40, n, ENG[eng > 3u ? 0u : eng]);
-    } else if (!list_on && page == PG_EDIT && edit_alt == 2u) {
+        n = put_str(d, 40, n, kit_midi(tr) ? "MIDI" : ENG[kit_eng(tr)]);
+    } else if (!list_on && page == PG_EDIT && kit_midi(tr) && !edit_alt) {
+        uint32_t sc = set.kit[tr].scale > 5u ? 0u : set.kit[tr].scale;
+        n = put_str(d, 40, n, " ");
+        n = put_str(d, 40, n, SCALE_N[sc]);
+    } else if (!list_on && page == PG_EDIT && kit_midi(tr) && edit_alt == 2u) {
         n = put_str(d, 40, n, " ");
         n = put_str(d, 40, n, map_of(set.kit[tr].map)->name);
     }
@@ -1224,11 +1282,17 @@ static void header_text(char *d) {
 static void status_text(char *d) {
     uint32_t n, tr = trk();
     if (list_on) {
-        const MapDef *k = map_of(list_sel);
         n = put_str(d, 40, 0, " ");
-        n = put_str(d, 40, n, k->name);
-        n = put_str(d, 40, n, "  CH ");
-        put_u_at(d, 40, n, k->ch);
+        if (list_kind) {
+            put_str(d, 40, n, ENG[list_sel & 3u]);
+            return;
+        }
+        {
+            const MapDef *k = map_of(list_sel);
+            n = put_str(d, 40, n, k->name);
+            n = put_str(d, 40, n, "  CH ");
+            put_u_at(d, 40, n, k->ch);
+        }
         return;
     }
     n = put_str(d, 40, 0, " ");
@@ -1254,16 +1318,15 @@ static const char *hint_text(void) {
     if (list_on) return " SELECT MOVES  SEL PICKS";
     if (page == PG_FX && fx_alt) return " PRESS FX FOR THE LAW";
     if (page == PG_FX) return " USB IN GOES TO PHONES";
-    if (page == PG_HOME) {
-        uint32_t eng = set.kit[trk()].engine;
-        return ENGNXT[eng > 3u ? 0u : eng];
-    }
+    if (page == PG_HOME) return kit_midi(trk()) ? " PRESS HOME FOR DRUMS" : " PRESS HOME FOR MIDI";
     if (page == PG_SEQ && rec && seq_run) return " REC WRITES THE STEP";
     if (page == PG_SEQ && seq_view == VW_SONG) return " PLAY WALKS THE CHAIN";
     if (page == PG_SEQ) return " BLACK KEY PICKS LANE";
-    if (page == PG_EDIT && edit_alt == 2u) return map_of(set.kit[trk()].map)->hint;
-    if (page == PG_EDIT && edit_alt) return " PRESS EDIT FOR THE MAP";
-    if (page == PG_EDIT) return " PRESS EDIT FOR NOTES";
+    if (page == PG_EDIT && kit_midi(trk()) && edit_alt == 2u) return map_of(set.kit[trk()].map)->hint;
+    if (page == PG_EDIT && kit_midi(trk()) && edit_alt) return " PRESS EDIT FOR THE MAP";
+    if (page == PG_EDIT && kit_midi(trk())) return " PRESS EDIT FOR NOTES";
+    if (page == PG_EDIT && edit_alt) return " LANE LEVEL";
+    if (page == PG_EDIT) return " PRESS EDIT FOR LEVELS";
     if (page == PG_ARP && set.arp_latch) return " LATCH HOLDS THE KEYS";
     if (page == PG_ARP) return " PRESS ARP TO LATCH";
     if (page == PG_LFO) return " DEPTH IS AUDIBLE";
@@ -1277,8 +1340,9 @@ static const char *hint_text(void) {
 #define LIST_SHOWN 10u
 #define LIST_RH 19u
 #define LIST_Y 16u
+static uint32_t list_n(void) { return list_kind ? 4u : (NMAP ? NMAP : 1u); }
 static void list_clamp(void) {
-    uint32_t n = NMAP ? NMAP : 1u;
+    uint32_t n = list_n();
     uint32_t sel = list_sel, top = list_top;
     if (sel >= n) sel = n - 1u;
     if (sel < top) top = sel;
@@ -1289,32 +1353,52 @@ static void list_clamp(void) {
     list_top = (uint8_t)top;
 }
 static void list_open(void) {
-    uint32_t m = set.kit[trk()].map;
-    if (m >= NMAP) m = 0;
-    list_sel = (uint8_t)m;
-    list_top = (uint8_t)(m > 2u ? m - 2u : 0u);
+    uint32_t tr = trk();
+    if (kit_midi(tr)) {
+        uint32_t m = set.kit[tr].map;
+        if (m >= NMAP) m = 0;
+        list_kind = 0;
+        list_sel = (uint8_t)m;
+        list_top = (uint8_t)(m > 2u ? m - 2u : 0u);
+    } else {
+        list_kind = 1;
+        list_sel = (uint8_t)kit_eng(tr);
+        list_top = 0;
+    }
     list_on = 1;
     list_clamp();
     paint_req = 1;
 }
 static void list_move(int e) {
     int s = (int)list_sel + e;
+    int n = (int)list_n();
     if (s < 0) s = 0;
-    if (s >= (int)NMAP) s = (int)NMAP - 1;
+    if (s >= n) s = n - 1;
     list_sel = (uint8_t)s;
     list_clamp();
     paint_req = 1;
 }
 static void list_pick(void) {
-    uint32_t tr = trk(), m = list_sel;
-    if (m >= NMAP) m = 0;
-    if (set.kit[tr].map != (uint8_t)m || set.kit[tr].bank) {
-        set.kit[tr].map = (uint8_t)m;
-        set.kit[tr].bank = 0;
-        apply_map(tr);
-        dirty = 1;
-        t_change = fm1_ms;
-        message(map_of(m)->msg);
+    uint32_t tr = trk();
+    if (list_kind) {
+        uint8_t e = (uint8_t)((set.kit[tr].engine & 0x80u) | (list_sel & 3u));
+        if ((set.kit[tr].engine & 3u) != (list_sel & 3u)) {
+            set.kit[tr].engine = e;
+            dirty = 1;
+            t_change = fm1_ms;
+            message(ENGMSG[list_sel & 3u]);
+        }
+    } else {
+        uint32_t m = list_sel;
+        if (m >= NMAP) m = 0;
+        if (set.kit[tr].map != (uint8_t)m || set.kit[tr].bank) {
+            set.kit[tr].map = (uint8_t)m;
+            set.kit[tr].bank = 0;
+            apply_map(tr);
+            dirty = 1;
+            t_change = fm1_ms;
+            message(map_of(m)->msg);
+        }
     }
     list_on = 0;
     paint_req = 1;
@@ -1325,16 +1409,16 @@ static void list_pill(int32_t x, int32_t y, int32_t w, int32_t h, uint16_t c) {
     cv_rect(x + 1, y + 1, w - 2, h - 2, c);
 }
 static void list_bar(int32_t sy, int32_t sh) {
-    uint32_t track = LIST_SHOWN * LIST_RH, th, ty;
+    uint32_t track = LIST_SHOWN * LIST_RH, th, ty, n = list_n();
     int32_t y0 = (int32_t)LIST_Y - sy, y1 = (int32_t)(LIST_Y + track) - sy, a, b;
     if (y0 < 0) y0 = 0;
     if (y1 > sh) y1 = sh;
     if (y1 > y0) cv_rect(232, y0, 3, y1 - y0, C_DIM);
-    if (NMAP <= LIST_SHOWN) return;
-    th = LIST_SHOWN * track / NMAP;
+    if (n <= LIST_SHOWN) return;
+    th = LIST_SHOWN * track / n;
     if (th < 8u) th = 8u;
     if (th > track) th = track;
-    ty = (uint32_t)list_top * (track - th) / (NMAP - LIST_SHOWN);
+    ty = (uint32_t)list_top * (track - th) / (n - LIST_SHOWN);
     a = (int32_t)(LIST_Y + ty) - sy;
     b = a + (int32_t)th;
     if (a < 0) a = 0;
@@ -1355,11 +1439,14 @@ static void draw_list(void) {
             int32_t ry = (int32_t)(row * LIST_RH);
             const char *s;
             int on;
-            if (ix >= NMAP) continue;
+            if (ix >= list_n()) continue;
             on = ix == list_sel;
             list_pill(4, ry + 1, 222, (int32_t)LIST_RH - 2, on ? C_HI : C_LINE);
-            s = map_of(ix)->hint;
-            if (s && s[0] == ' ') s++;
+            if (list_kind) s = ENG[ix & 3u];
+            else {
+                s = map_of(ix)->hint;
+                if (s && s[0] == ' ') s++;
+            }
             cv_text(12, ry + 1, &FONT_S, s ? s : "", on ? C_BLACK : C_HI);
             cv_text(214, ry + 1, &FONT_S, ">", on ? C_BLACK : C_HI);
         }
@@ -1510,7 +1597,7 @@ static void menv_tick(void) {
     }
 }
 
-#define NTAKE 48u
+#define NTAKE 96u
 typedef struct { uint16_t dt; uint8_t note, vel; } TakeEv;
 static TakeEv takeq[NTAKE];
 static uint8_t take_n, take_w;
@@ -1524,8 +1611,8 @@ static void take_push(uint32_t note, uint32_t vel) {
     now = fm1_ms;
     if (take_n) {
         dt = now - take_last;
-        if (dt > 2000u) dt = 2000u;
-        while (take_n && take_span + dt > 8000u) {
+        if (dt > 4000u) dt = 4000u;
+        while (take_n && take_span + dt > 20000u) {
             uint32_t old = (take_w + NTAKE - take_n) % NTAKE;
             uint32_t next;
             if (take_span >= takeq[old].dt) take_span -= takeq[old].dt;
@@ -1572,8 +1659,7 @@ static void request_lane(uint32_t ki, uint32_t lane, uint32_t vel, int record) {
     if (note > 127u) note = 36u;
     model = set.kit[ki].model[lane];
     if (model > 3u) model = 1u;
-    eng = set.kit[ki].engine;
-    if (eng > 3u) eng = 0;
+    eng = set.kit[ki].engine & 3u;
     g = kit_gain(ki, lane);
     if (g) {
         w = pend_w;
@@ -1607,7 +1693,7 @@ static void request_lane(uint32_t ki, uint32_t lane, uint32_t vel, int record) {
     }
 }
 
-static uint32_t take_bpm(void) {
+static uint32_t take_median(void) {
     uint16_t iv[NTAKE];
     uint32_t n = 0, i, j, med, bpm = 0, best = 0, oldest;
     if (take_n < 2u) return 0;
@@ -1635,40 +1721,113 @@ static uint32_t take_bpm(void) {
     }
     return bpm;
 }
+/* One, two, or four bars, whichever lands nearest the tempo already set.
+ * The felt gap between hits can still win, and a longer bar count is kept
+ * when it agrees with that gap. Four patterns is the whole song. */
+static uint32_t take_bars_bpm(uint32_t ms, uint32_t room, uint32_t target, uint32_t med, uint32_t *bars_out) {
+    static const uint8_t CAND[3] = {1, 2, 4};
+    uint32_t c, best_err = 100000u, best_bpm = 0, best_bars = 1;
+    if (room < 1u) room = 1u;
+    if (room > NPAT) room = NPAT;
+    if (!ms) ms = 1u;
+    if (target < 40u || target > 240u) target = 120u;
+    for (c = 0; c < 3u; c++) {
+        uint32_t b = CAND[c], bp, err;
+        if (b > room) continue;
+        bp = b * 240000u / ms;
+        if (bp < 40u || bp > 240u) continue;
+        err = bp > target ? bp - target : target - bp;
+        if (err < best_err) { best_err = err; best_bpm = bp; best_bars = b; }
+    }
+    if (med >= 40u && med <= 240u) {
+        uint32_t err = med > target ? med - target : target - med;
+        if (err < best_err) { best_err = err; best_bpm = med; best_bars = 1u; }
+    }
+    if (med >= 40u && med <= 240u) {
+        for (c = 1; c < 3u; c++) {
+            uint32_t b = CAND[c], bp, err;
+            if (b > room) continue;
+            bp = b * 240000u / ms;
+            if (bp < 40u || bp > 240u) continue;
+            err = bp > med ? bp - med : med - bp;
+            if (err <= 8u) { best_bpm = med; best_bars = b; }
+        }
+    }
+    if (!best_bpm) { best_bpm = target; best_bars = 1u; }
+    *bars_out = best_bars;
+    return best_bpm;
+}
 static void take_commit(void) {
-    uint32_t bpm, i, t, step_ms, len, pat, ki, oldest, mask = 0;
-    bpm = take_bpm();
-    if (!bpm) { message("NO TAKE"); return; }
+    uint32_t bpm, bars, i, t, step_ms, len, pat, ki, oldest, mask = 0, pitched = 0;
+    uint32_t ms, med, room, tail;
+    if (take_n < 2u) { message("NO TAKE"); return; }
+    med = take_median();
+    tail = fm1_ms - take_last;
+    ms = take_span + tail;
+    if (ms < 1u) ms = 1u;
+    if (ms > 20000u) ms = 20000u;
+    pat = pat_now();
+    room = NPAT - pat;
+    if (!room) room = 1u;
+    bpm = take_bars_bpm(ms, room, set.tempo, med, &bars);
     len = set.length < 1u ? 1u : set.length;
     if (len > 16u) len = 16u;
-    pat = pat_now();
+    if (bars < 1u) bars = 1u;
+    if (pat + bars > NPAT) bars = NPAT - pat;
     ki = trk();
     oldest = (take_w + NTAKE - take_n) % NTAKE;
     for (i = 0; i < take_n; i++) {
         uint8_t note = takeq[(oldest + i) % NTAKE].note;
         if (note >= 128u && note < 128u + NLANE) mask |= 1u << (note - 128u);
+        else if (note && note < 128u) pitched = 1u;
     }
-    if (!mask) { message("NO TAKE"); return; }
-    for (i = 0; i < NLANE; i++) if (mask & (1u << i)) {
-        uint32_t s;
-        for (s = 0; s < 16u; s++) set.vel[pat][ki][i][s] = 0;
-    }
+    if (kit_midi(ki) && pitched && !mask) {
+        pitched = 1u;
+    } else if (!mask) {
+        message("NO TAKE");
+        return;
+    } else pitched = 0u;
     step_ms = 15000u / bpm;
     if (step_ms < 1u) step_ms = 1u;
+    for (i = 0; i < bars; i++) {
+        uint32_t pi = pat + i, lane, s;
+        if (pi >= NPAT) break;
+        if (pitched) {
+            for (s = 0; s < 16u; s++) set.pit[pi][ki][s] = 0;
+            for (lane = 0; lane < NLANE; lane++)
+                for (s = 0; s < 16u; s++) set.vel[pi][ki][lane][s] = 0;
+        } else for (lane = 0; lane < NLANE; lane++) if (mask & (1u << lane)) {
+            for (s = 0; s < 16u; s++) set.vel[pi][ki][lane][s] = 0;
+        }
+    }
     t = 0;
     for (i = 0; i < take_n; i++) {
         TakeEv *e = &takeq[(oldest + i) % NTAKE];
-        uint32_t step;
+        uint32_t step, pi, si, total = bars * len;
         t += e->dt;
-        step = (t + step_ms / 2u) / step_ms % len;
-        if (e->note >= 128u && e->note < 128u + NLANE)
-            set.vel[pat][ki][(uint32_t)e->note - 128u][step] = e->vel ? e->vel : 100u;
+        if (!total) continue;
+        step = (t + step_ms / 2u) / step_ms;
+        if (step >= total) step = total - 1u;
+        pi = pat + step / len;
+        si = step % len;
+        if (pi >= NPAT || si >= 16u) continue;
+        if (pitched) {
+            if (e->note && e->note < 128u) {
+                set.pit[pi][ki][si] = e->note;
+                set.vel[pi][ki][0][si] = e->vel ? e->vel : 100u;
+            }
+        } else if (e->note >= 128u && e->note < 128u + NLANE)
+            set.vel[pi][ki][(uint32_t)e->note - 128u][si] = e->vel ? e->vel : 100u;
     }
     set.tempo = (uint8_t)bpm;
+    if (bars > 1u) {
+        for (i = 0; i < bars && i < 16u; i++) set.song[i] = (uint8_t)(pat + i);
+        set.song_len = (uint8_t)bars;
+    }
     dirty = 1;
     t_change = fm1_ms;
     paint_req = 1;
-    message_take(bpm);
+    message_take(bpm, bars);
 }
 
 static uint8_t held[16], nheld, played[16], nplayed;
@@ -1870,7 +2029,9 @@ static void clamp_set(void) {
         if (set.kit[i].map >= NMAP) set.kit[i].map = 0;
         if (set.kit[i].bank > 1u) set.kit[i].bank = 0;
         if (set.kit[i].ch < 1u || set.kit[i].ch > 16u) set.kit[i].ch = (uint8_t)(10u + i);
-        if (set.kit[i].engine > 3u) set.kit[i].engine = 0;
+        set.kit[i].engine = (uint8_t)(set.kit[i].engine & 0x83u);
+        if (set.kit[i].scale > 5u) set.kit[i].scale = 0;
+        if (set.kit[i].root > 11u) set.kit[i].root = 0;
         if (set.kit[i].level > 100u) set.kit[i].level = 100;
         map_labels(i);
         for (lane = 0; lane < NLANE; lane++) {
@@ -1878,6 +2039,12 @@ static void clamp_set(void) {
             if (set.kit[i].lvl[lane] > 100u) set.kit[i].lvl[lane] = 100;
             if (set.kit[i].model[lane] > 3u) set.kit[i].model[lane] = model_of(lname[i][lane]);
             for (k = 0; k < 4u; k++) if (set.kit[i].parm[lane][k] > 100u) set.kit[i].parm[lane][k] = 40;
+        }
+        {
+            uint32_t p, s;
+            for (p = 0; p < NPAT; p++)
+                for (s = 0; s < 16u; s++)
+                    if (set.pit[p][i][s] > 127u) set.pit[p][i][s] = 0;
         }
     }
     for (i = 0; i < 16u; i++) if (set.song[i] >= NPAT) set.song[i] = 0;
@@ -2084,7 +2251,7 @@ static void turn_page(uint32_t k, int e) {
             set.vel[pat_now()][tr][lane][cursor] = (uint8_t)clampu((int)set.vel[pat_now()][tr][lane][cursor] + e, 0, 127);
         else if (k == 2u) set.length = (uint8_t)clampu((int)set.length + e, 1, 16);
         else set.lane = (uint8_t)clampu((int)set.lane + e, 0, (int)NLANE - 1);
-    } else if (page == PG_EDIT && edit_alt == 2u) {
+    } else if (page == PG_EDIT && kit_midi(tr) && edit_alt == 2u) {
         if (k == 0u) {
             set.kit[tr].map = (uint8_t)clampu((int)set.kit[tr].map + e, 0, (int)NMAP - 1);
             set.kit[tr].bank = 0;
@@ -2100,9 +2267,17 @@ static void turn_page(uint32_t k, int e) {
         } else if (k == 2u) {
             set.kit[tr].note[lane_now()] = (uint8_t)clampu((int)set.kit[tr].note[lane_now()] + e, 0, 127);
         } else set.kit[tr].ch = (uint8_t)clampu((int)set.kit[tr].ch + e, 1, 16);
-    } else if (page == PG_EDIT && edit_alt) {
+    } else if (page == PG_EDIT && kit_midi(tr) && edit_alt) {
         uint32_t ix = (lane_now() & 4u) + k;
         set.kit[tr].note[ix] = (uint8_t)clampu((int)set.kit[tr].note[ix] + e, 0, 127);
+    } else if (page == PG_EDIT && kit_midi(tr)) {
+        if (k == 0u) set.kit[tr].scale = (uint8_t)clampu((int)set.kit[tr].scale + e, 0, 5);
+        else if (k == 1u) set.kit[tr].root = (uint8_t)clampu((int)set.kit[tr].root + e, 0, 11);
+        else if (k == 2u) set.kit[tr].ch = (uint8_t)clampu((int)set.kit[tr].ch + e, 1, 16);
+        else set.oct = (int8_t)clampu((int)set.oct + e, -2, 2);
+    } else if (page == PG_EDIT && edit_alt) {
+        uint32_t ix = (lane_now() & 4u) + k;
+        set.kit[tr].lvl[ix] = (uint8_t)clampu((int)set.kit[tr].lvl[ix] + e, 0, 100);
     } else if (page == PG_EDIT) {
         set.kit[tr].parm[lane_now()][k] = (uint8_t)clampu((int)set.kit[tr].parm[lane_now()][k] + e, 0, 100);
     } else if (page == PG_ARP) {
@@ -2155,6 +2330,39 @@ static void track_step(int e) {
     while (t < 0) t += (int)NKIT;
     set.track = (uint8_t)(t % (int)NKIT);
     paint_req = 1;
+}
+
+/* Scale 0 keeps the kit lanes. Chromatic uses the key's own pitch.
+ * The others walk consecutive keys, black ones included, from the root. */
+static uint32_t scale_note(uint32_t ki, uint32_t key, uint32_t piano) {
+    static const uint8_t IV[4][7] = {
+        {0, 2, 4, 5, 7, 9, 11},
+        {0, 2, 3, 5, 7, 8, 10},
+        {0, 2, 4, 7, 9, 0, 0},
+        {0, 2, 3, 5, 7, 9, 10},
+    };
+    static const uint8_t LN[4] = {7, 7, 5, 7};
+    uint32_t sc, ix, n, root;
+    int32_t note;
+    if (ki >= NKIT) ki = 0;
+    sc = set.kit[ki].scale;
+    if (sc < 1u || sc > 5u) return 0;
+    if (sc == 1u) return piano > 127u ? 127u : piano;
+    ix = sc - 2u;
+    n = LN[ix];
+    root = set.kit[ki].root > 11u ? 0u : set.kit[ki].root;
+    note = 48 + 12 * (int32_t)set.oct + (int32_t)root;
+    note += (int32_t)IV[ix][key % n] + 12 * (int32_t)(key / n);
+    if (note < 0) note = 0;
+    if (note > 127) note = 127;
+    return (uint32_t)note;
+}
+static void scale_on(uint32_t ki, uint32_t note, uint32_t vel) {
+    if (!note || note > 127u || !vel) return;
+    if (vel > 127u) vel = 127u;
+    midi_out(0x90u | kit_ch(ki), note, vel);
+    if (ki == trk()) take_push(note, vel);
+    menv_trig(1);
 }
 
 static void app_main(void) {
@@ -2244,14 +2452,20 @@ static void app_main(void) {
                     t_change = fm1_ms;
                     paint_req = 1;
                 } else if (!grid) {
-                    request_lane(trk(), KEY_LANE[note % 12u], vel, 1);
+                    uint32_t tr = trk(), sn = scale_note(tr, k, note);
+                    if (sn) {
+                        down_note[k] = (uint8_t)sn;
+                        scale_on(tr, sn, vel);
+                    } else request_lane(tr, KEY_LANE[note % 12u], vel, 1);
                 }
             }
             if ((up >> k & 1u) && down_note[k]) {
-                if (down_count) down_count--;
-                if (set.arp_mode) note_drop(down_note[k]);
-                tone_stop(down_note[k]);
-                midi_out(0x80u | out_ch(), down_note[k], 0);
+                if (page == PG_ARP) {
+                    if (down_count) down_count--;
+                    if (set.arp_mode) note_drop(down_note[k]);
+                    tone_stop(down_note[k]);
+                    midi_out(0x80u | out_ch(), down_note[k], 0);
+                } else midi_out(0x80u | kit_ch(trk()), down_note[k], 0);
                 down_note[k] = 0;
                 menv_release();
             }
@@ -2268,13 +2482,20 @@ static void app_main(void) {
                     menv_trig(1);
                     if (set.arp_mode) note_hold((uint8_t)note);
                     else { tone_start(note, vel); midi_out(0x90u | out_ch(), note, vel); }
-                } else if (!(page == PG_SEQ && seq_view == VW_GRID))
-                    request_lane(trk(), KEY_LANE[note % 12u], vel, 1);
+                } else if (!(page == PG_SEQ && seq_view == VW_GRID)) {
+                    uint32_t sn = scale_note(trk(), key, note);
+                    if (sn) scale_on(trk(), sn, vel);
+                    else request_lane(trk(), KEY_LANE[note % 12u], vel, 1);
+                    ext_note[key] = (uint8_t)(sn ? sn : note);
+                }
             } else if (ext_note[key]) {
                 if (page == PG_ARP) {
                     if (set.arp_mode) note_drop(ext_note[key]);
                     tone_stop(ext_note[key]);
                     midi_out(0x80u | out_ch(), ext_note[key], 0);
+                    menv_release();
+                } else if (set.kit[trk()].scale) {
+                    midi_out(0x80u | kit_ch(trk()), ext_note[key], 0);
                     menv_release();
                 }
                 ext_note[key] = 0;
@@ -2310,19 +2531,21 @@ static void app_main(void) {
         if (pg == PG_FX && page == PG_FX) { fx_alt ^= 1u; paint_req = 1; }
         else if (pg == PG_ENV && page == PG_ENV) { env_alt ^= 1u; paint_req = 1; }
         else if (pg == PG_EDIT && page == PG_EDIT) {
-            edit_alt = (uint8_t)((edit_alt + 1u) % 3u);
+            uint32_t n = kit_midi(trk()) ? 3u : 2u;
+            edit_alt = (uint8_t)((edit_alt + 1u) % n);
             paint_req = 1;
         }
         else if (pg == PG_SEQ && page == PG_SEQ) {
             seq_view = (uint8_t)(seq_view == VW_GRID ? VW_SONG : VW_GRID);
             paint_req = 1;
         } else if (pg == PG_HOME && page == PG_HOME) {
-            uint32_t eng = (set.kit[trk()].engine + 1u) & 3u;
-            set.kit[trk()].engine = (uint8_t)eng;
+            uint8_t e = (uint8_t)(set.kit[trk()].engine ^ 0x80u);
+            set.kit[trk()].engine = e;
             dirty = 1;
             t_change = fm1_ms;
             paint_req = 1;
-            message(ENGMSG[eng]);
+            if (e & 0x80u) message("MIDI SILENT");
+            else message(ENGMSG[e & 3u]);
         } else if (pg == PG_ARP && page == PG_ARP) {
             set.arp_latch ^= 1u;
             if (!set.arp_latch) { nheld = 0; nplayed = 0; arp_stop(); }

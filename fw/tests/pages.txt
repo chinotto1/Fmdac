@@ -1,4 +1,4 @@
-# Fmdac 0.8 still treats a track as a kit. SELECT stays inside T1..T4, a black key picks a lane, every kit plays, the song reaches SNG 2, HOME changes that kit's engine.
+# Fmdac 0.9. SELECT stays inside T1..T4, a black key picks a lane, every kit plays, the song reaches SNG 2. HOME opens the kit levels, and pressing it again makes that kit MIDI.
 40 shot
 80 enc 0 4
 140 shot

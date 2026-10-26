@@ -1,30 +1,32 @@
-# Fmdac 0.8. K1 reaches the AUv3 app maps after the seven original charts.
+# Fmdac 0.9. K1 on a MIDI kit reaches the AUv3 app maps after the seven original charts.
 # GM8 is index 18: D# is lane 4, mid tom 47, channel 10.
 # HAMR2 is index 20: F# is lane 2, clap 39, the app row order.
 # RUIS is index 32: C is kick 49.
 # VA909 is index 39: page 2 lane 0 is note 60. Lane 3 is empty and sends nothing.
-40 btn 6
-80 btn 6
+40 btn 8
+80 btn 8
 120 btn 6
-160 enc 2 18
-220 shot
-260 keys 1024
-340 keys 0
-400 enc 2 2
-460 shot
-500 keys 2
-580 keys 0
-640 enc 2 12
-700 shot
-740 keys 128
-820 keys 0
-880 enc 2 7
-940 shot
-980 enc 3 1
-1040 shot
-1080 keys 128
-1160 keys 0
-1200 keys 2048
-1280 keys 0
-1360 shot
-1500 end
+160 btn 6
+200 btn 6
+240 enc 2 18
+300 shot
+340 keys 1024
+420 keys 0
+480 enc 2 2
+540 shot
+580 keys 2
+660 keys 0
+720 enc 2 12
+780 shot
+820 keys 128
+900 keys 0
+960 enc 2 7
+1020 shot
+1060 enc 3 1
+1120 shot
+1160 keys 128
+1240 keys 0
+1280 keys 2048
+1360 keys 0
+1440 shot
+1580 end

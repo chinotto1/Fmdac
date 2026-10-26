@@ -1,0 +1,24 @@
+# Fmdac 0.9. Eight kicks, half a second apart, across about four seconds.
+# That is two bars at 120. REC chains pattern 1 into pattern 2.
+40 shot
+400 keys 128
+450 keys 0
+900 keys 128
+950 keys 0
+1400 keys 128
+1450 keys 0
+1900 keys 128
+1950 keys 0
+2400 keys 128
+2450 keys 0
+2900 keys 128
+2950 keys 0
+3400 keys 128
+3450 keys 0
+3900 keys 128
+3950 keys 0
+4400 btn 13
+4600 shot
+4700 btn 12
+7500 shot
+9000 end

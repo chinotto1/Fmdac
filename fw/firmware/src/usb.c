@@ -943,29 +943,27 @@ static int uac_play_on(void)
     return uac.out_alt && (uint32_t)(fm1_ms - uac.out_ms) < 80u;
 }
 
-/* One stereo frame for the headphone mix. Returns 0 when the computer is not streaming.
- * If the ring is more than 128 frames ahead, skip down to 64 so the headphones stay close. */
-static int uac_play_frame(int32_t *l, int32_t *r)
+#include "play_down.h"
+
+static PlayRs up_rs;
+static uint8_t up_seen_rate;
+
+/* One input frame. A full-looking ring slips a single frame, never a block. */
+static int up_pull(void *ctx, int16_t *l, int16_t *r)
 {
     uint32_t w, rd, fill, s, drop;
-    if (!uac_play_on()) {
-        *l = 0;
-        *r = 0;
-        return 0;
-    }
+    (void)ctx;
     w = up_w;
     rd = up_r;
     drop = up_drop;
     if ((int32_t)(drop - rd) > 0)
         rd = drop;
     fill = w - rd;
-    if (fill > 128u) {
-        rd = w - 64u;
-        fill = 64u;
+    if (fill > 96u) {
+        rd++;
+        fill--;
     }
     if (!fill) {
-        *l = 0;
-        *r = 0;
         up_r = rd;
         return 0;
     }
@@ -975,6 +973,29 @@ static int uac_play_frame(int32_t *l, int32_t *r)
     *l = (int16_t)(s & 0xFFFFu);
     *r = (int16_t)((s >> 16) & 0xFFFFu);
     return 1;
+}
+
+/* One stereo frame for the headphone mix. Returns 0 when the computer is not streaming.
+ * 44.1 kHz is one frame in, one frame out. 48 kHz steps by PLAY_48_STEP. An empty
+ * ring repeats the last frame instead of writing a zero into the decay. */
+static int uac_play_frame(int32_t *l, int32_t *r)
+{
+    uint8_t rate;
+    if (!uac_play_on()) {
+        play_rs_reset(&up_rs);
+        up_seen_rate = 0;
+        *l = 0;
+        *r = 0;
+        return 0;
+    }
+    rate = uac.p48;
+    if (rate != up_seen_rate) {
+        play_rs_reset(&up_rs);
+        up_seen_rate = rate;
+    }
+    if ((int32_t)(up_drop - up_r) > 0)
+        play_rs_reset(&up_rs);
+    return play_rs_out(&up_rs, rate, up_pull, 0, l, r);
 }
 #endif
 

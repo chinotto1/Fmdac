@@ -1,0 +1,28 @@
+# Fmdac 0.9. SEL on a drum kit lists the machines. HOME marks the kit and
+# the next press makes it MIDI. SEL then lists the maps. A major scale
+# plays C3 on channel 10 and the kit sends no drum-lane note for that key.
+40 btn 3
+80 shot
+120 enc 0 1
+160 shot
+200 btn 3
+240 shot
+280 keys 128
+360 keys 0
+400 btn 8
+440 shot
+480 btn 8
+520 shot
+560 btn 3
+600 shot
+640 btn 8
+680 keys 128
+760 keys 0
+800 btn 6
+840 shot
+880 enc 2 2
+920 shot
+960 keys 1
+1040 keys 0
+1100 shot
+1200 end

@@ -18,15 +18,19 @@
         <span class="eyebrow">FM-1</span>
         <h1>Install Fmdac.</h1>
         <p>
-          Fmdac 0.8 loads with this page. Connect one FM-1 with a USB data cable, in Chrome or Edge on a computer.
+          Fmdac 0.9 loads with this page. Connect one FM-1 with a USB data cable, in Chrome or Edge on a computer.
           Leave the cable in until the page says the FM-1 came back.
         </p>
         <p>
           Four kit tracks, T1 to T4. A track is the whole kit, eight lanes, and all four play together.
-          SELECT picks the kit. SEL opens that kit's map list. SELECT moves through the list, SEL picks the map, and HOME closes the list and leaves the kit as it was.
+          SELECT picks the kit. On HOME the selected kit is marked. Press HOME again and that kit becomes MIDI or a drum machine.
+          A MIDI kit is silent on the FM-1 and still sends MIDI. SEL on a drum kit opens 808, 909, CR-78, and SDS. SEL on a MIDI kit opens the map list.
+          SELECT moves through the list, SEL picks, and HOME closes the list and leaves the kit as it was.
           On the grid, a black key picks a lane and K4 is that lane.
           Off the grid the keys play the kit: C is the kick, D the snare, F# the closed hat. The ARP page still plays the sine tone.
-          Press EDIT until the header says MAP. K1 starts with GM, TR-909, TR-707, TR-727, TR-08, Volca Beats, and Hammerhead, and K2 opens the next page of that chart.
+          A MIDI kit can play a scale from the keys: the map lanes, chromatic, major, minor, pentatonic, or dorian.
+          On a drum kit, EDIT is tune, decay, tone, and drop, then the lane levels. On a MIDI kit, EDIT is the scale, then the notes, then the map.
+          K1 starts with GM, TR-909, TR-707, TR-727, TR-08, Volca Beats, and Hammerhead, and K2 opens the next page of that chart.
           Those are the published notes of those instruments. Hammerhead there is the grouped list. HAMR2 is the same eight notes in the order the OCTACHRON author posted.
           After those seven, the list and K1 continue through the AUv3 app maps: AR-909, Axon 2, Blip Box, Dadamachines, Digistix, DM1, DrumComputer, EGDR 606, 808, and 909, FAC Drumkit, General MIDI 8 and 16, Koala Sampler 2x8 and 4x4, the six Korg Gadget kits, MV08, NS2 Slate, Pure Acid Drums, Ruismaker and Ruismaker FM, SDS-X, Sitala, Splat-to-Clat, VA Drum SM, VA Drum 2 808 and 909, and Vatanator.
           The names on the screen are short. The bottom line names the app: AR909, AXON2, BLIP, DADA, DIGI, DM1, DRUMC, E606, E808, E909, FAC, GM8, GM16, HAMR2, KO2X8, KO4X4, AMS, BILBAO, GLAD, LONDON, RECIFE, TOKYO, MV08, NS2, ACID, RUIS, RUFM, SDSX, SITALA, SPLAT, VASM, VA808, VA909, VATA.
@@ -34,10 +38,11 @@
           TR-707 and TR-727 use notes 35 through 51. The TR-08 chart stands in for the original TR-808, which has no MIDI.
         </p>
         <p>
-          SEQ is the step grid, then a song chain of four patterns. REC while stopped writes a short take of this kit into the pattern and sets the BPM.
-          HOME sets each kit's level, and pressing it again changes that kit's synthesized 808, 909, CR-78, or SDS character. There are no sample ROMs.
+          SEQ is the step grid, then a song chain of four patterns. REC while stopped writes a take of one, two, or four bars across at most four patterns and sets the BPM.
+          A song saved by 0.8 loads as the factory kits.
+          HOME sets each kit's level. There are no sample ROMs.
           The four sounding voices are shared, so a second kick retriggers the first.
-          While a computer streams audio to the FM-1, that audio goes through the converter to the headphones. Playback is 48 kHz and drops the extra frames.
+          While a computer streams audio to the FM-1, that audio goes through the converter to the headphones. Playback at 48 kHz is resampled to the headphone clock.
           When nothing is streaming, the headphones hear the FM-1's own mix. The computer records the headphone mix.
           Installing replaces the firmware that is on the FM-1.
         </p>
@@ -68,7 +73,7 @@
             <strong id="current-title">Fmdac</strong>
             <span id="current-badge" class="badge">Checking</span>
           </div>
-          <p id="current-reason">Loading Fmdac 0.8.</p>
+          <p id="current-reason">Loading Fmdac 0.9.</p>
           <p class="small">Source: <a id="current-source" href="https://github.com/chinotto1/Fmdac">chinotto1/Fmdac</a></p>
         </div>
         <div id="recovery-panel" hidden>
@@ -151,7 +156,7 @@
       <span class="eyebrow">Confirm</span>
       <h2 id="confirm-title">Install this firmware?</h2>
       <p id="confirm-description"></p>
-      <p id="confirm-limit">Fmdac 0.8 replaces the firmware. It is four kit tracks, and each track is eight lanes. SELECT picks the kit. SEL opens that kit's map list, SELECT moves, SEL picks, and HOME closes it. A black key picks the lane. EDIT opens the kit map. K1 starts with published GM, TR-909, TR-707, TR-727, TR-08, Volca Beats, and Hammerhead notes, then the AUv3 app maps from the OCTACHRON list. A lane with no note in that chart stays silent. OneShot and Tekno are not included. It does not contain every preset stored in the OCTACHRON app. TR-707 and TR-727 stop at notes 35 through 51. Computer audio is converted to the headphones only while the computer is streaming to the FM-1. Playback is 48 kHz and drops the extra frames. The drums are synthesized characters, not sample ROMs, and the four local voices are shared across the kits. REC quantizes a take into the pattern.</p>
+      <p id="confirm-limit">Fmdac 0.9 replaces the firmware. It is four kit tracks, and each track is eight lanes. SELECT picks the kit. On HOME the selected kit is marked, and the next HOME press chooses MIDI or a drum machine. A MIDI kit is silent locally. SEL opens 808, 909, CR-78, and SDS on a drum kit, or the map list on a MIDI kit. SELECT moves, SEL picks, and HOME closes the list. A black key picks the lane. EDIT on a drum kit is tune, decay, tone, drop, and lane levels. EDIT on a MIDI kit is the scale, the notes, and the map. K1 starts with published GM, TR-909, TR-707, TR-727, TR-08, Volca Beats, and Hammerhead notes, then the AUv3 app maps from the OCTACHRON list. A lane with no note in that chart stays silent. OneShot and Tekno are not included. It does not contain every preset stored in the OCTACHRON app. TR-707 and TR-727 stop at notes 35 through 51. Computer audio is converted to the headphones only while the computer is streaming to the FM-1. Playback at 48 kHz is resampled to the headphone clock. The drums are synthesized characters, not sample ROMs, and the four local voices are shared across the kits. REC quantizes a take of one, two, or four bars. A song saved by 0.8 loads as the factory kits.</p>
       <dl>
         <dt>Connected device</dt>
         <dd id="confirm-device"></dd>

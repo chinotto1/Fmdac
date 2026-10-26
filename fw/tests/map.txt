@@ -1,9 +1,9 @@
-# Fmdac 0.8 still walks the first seven maps. EDIT three times opens this kit's map. K1 walks them. C plays lane 0.
-40 btn 6
-80 btn 6
+# Fmdac 0.9. A MIDI kit's third EDIT page is the map. K1 walks the first seven charts.
+40 btn 8
+80 btn 8
 120 btn 6
-160 shot
-200 enc 2 1
+160 btn 6
+200 btn 6
 240 shot
 280 enc 2 1
 320 shot
@@ -11,16 +11,18 @@
 400 shot
 440 enc 2 1
 480 shot
-520 enc 3 1
+520 enc 2 1
 560 shot
-600 keys 128
-680 keys 0
-760 enc 3 -1
-800 shot
-840 enc 2 1
+600 enc 3 1
+640 shot
+680 keys 128
+760 keys 0
+840 enc 3 -1
 880 shot
 920 enc 2 1
 960 shot
-1000 enc 3 1
+1000 enc 2 1
 1040 shot
-1200 end
+1080 enc 3 1
+1120 shot
+1280 end
