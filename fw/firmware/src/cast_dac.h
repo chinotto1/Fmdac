@@ -11,8 +11,8 @@
 
 enum {
   CAST_LAW_LINEAR = 0, /* SP-1200, Prophet VS, S950: mid-tread PCM */
-  CAST_LAW_DX7 = 1,    /* 12-bit DAC plus the /1 /2 /4 /8 scale factor */
-  CAST_LAW_DPCM = 2    /* Emulator II: 8-bit companded difference, then integrate */
+  CAST_LAW_DX7 = 1,    /* BA9221 12-bit field plus the SF0-SF3 /1 /2 /4 /8, Ken Shirriff */
+  CAST_LAW_DPCM = 2    /* Emulator II: Rossum's companding difference, then integrate */
 };
 
 #define CAST_BQ_MAX 4

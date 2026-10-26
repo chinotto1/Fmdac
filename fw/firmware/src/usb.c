@@ -97,7 +97,10 @@ static uint32_t ua_ring[UA_N];
 static volatile uint32_t ua_w, ua_r;
 static uint32_t ep4tx[UA_MAXF] __attribute__((aligned(32)));
 #if FELUCCA_UAC_OUT
-#define UP_N 256u                                   /* host -> device frames; one writer (USB), one reader (audio) */
+/* One render at 48 kHz wants about 279 frames, and the host keeps sending
+ * during the gap before that render. 256 was already full, so the newest
+ * packet was thrown away on every block. */
+#define UP_N 512u                                   /* host -> device frames; one writer (USB), one reader (audio) */
 static uint32_t up_ring[UP_N];
 static volatile uint32_t up_w, up_r, up_drop;
 static uint8_t ep2rx[256] __attribute__((aligned(32)));
@@ -930,12 +933,23 @@ static void ep2_rx(void)
         w++;
         fill++;
     }
-    RING_PUBLISH();
+    RING_PUBLISH();                                 /* the frames are visible before the index */
     up_w = w;
     uac.out_ms = fm1_ms;
     csr = (csr & ~0x165u) | 0x10u;                      /* clear RxPktRdy, flush, keep the status bits quiet */
     sie_wr(S_RXCSR1, csr & 0xFFu);
     sie_wr(S_RXCSR2, (csr >> 8) | 0x40u);
+}
+
+/* TIMER5, including the poll that nests inside the headphone render. An
+ * isochronous packet arrives every 1 ms and the endpoint holds one of them.
+ * usb_poll does not run during the render, so the render has to take the
+ * packet itself or the next one overwrites it. */
+static void uac_play_service(void)
+{
+    if (!usb.up || !usb.config || !uac.out_alt)
+        return;
+    ep2_rx();
 }
 
 static int uac_play_on(void)
@@ -947,8 +961,19 @@ static int uac_play_on(void)
 
 static PlayRs up_rs;
 static uint8_t up_seen_rate;
+static int32_t up_trim;
+static uint16_t up_blk;
+static uint32_t up_step;
 
-/* One input frame. A full-looking ring slips a single frame, never a block. */
+static uint32_t up_fill_now(void)
+{
+    uint32_t w = up_w, rd = up_r, drop = up_drop;
+    if ((int32_t)(drop - rd) > 0)
+        rd = drop;
+    return w - rd;
+}
+
+/* One input frame. The ratio, not a skip, is what keeps the ring in bounds. */
 static int up_pull(void *ctx, int16_t *l, int16_t *r)
 {
     uint32_t w, rd, fill, s, drop;
@@ -959,14 +984,11 @@ static int up_pull(void *ctx, int16_t *l, int16_t *r)
     if ((int32_t)(drop - rd) > 0)
         rd = drop;
     fill = w - rd;
-    if (fill > 96u) {
-        rd++;
-        fill--;
-    }
     if (!fill) {
         up_r = rd;
         return 0;
     }
+    RING_PUBLISH();                                 /* the index, then the frame it names */
     s = up_ring[rd & (UP_N - 1u)];
     RING_PUBLISH();
     up_r = rd + 1u;
@@ -976,14 +998,18 @@ static int up_pull(void *ctx, int16_t *l, int16_t *r)
 }
 
 /* One stereo frame for the headphone mix. Returns 0 when the computer is not streaming.
- * 44.1 kHz is one frame in, one frame out. 48 kHz steps by PLAY_48_STEP. An empty
- * ring repeats the last frame instead of writing a zero into the decay. */
+ * 44.1 kHz copies one frame. 48 kHz steps by PLAY_48_STEP, trimmed once per block.
+ * An empty ring repeats the last frame instead of writing a zero into the decay. */
 static int uac_play_frame(int32_t *l, int32_t *r)
 {
     uint8_t rate;
+    uint32_t nominal;
     if (!uac_play_on()) {
         play_rs_reset(&up_rs);
         up_seen_rate = 0;
+        up_trim = 0;
+        up_blk = 0;
+        up_step = 0;
         *l = 0;
         *r = 0;
         return 0;
@@ -992,9 +1018,20 @@ static int uac_play_frame(int32_t *l, int32_t *r)
     if (rate != up_seen_rate) {
         play_rs_reset(&up_rs);
         up_seen_rate = rate;
+        up_trim = 0;
+        up_blk = 0;
+        up_step = 0;
     }
     if ((int32_t)(up_drop - up_r) > 0)
         play_rs_reset(&up_rs);
+    nominal = rate ? PLAY_48_STEP : 65536u;
+    if (!up_step)
+        up_step = nominal;
+    if (++up_blk >= 256u) {
+        up_blk = 0;
+        up_step = play_lock_step(nominal, up_fill_now(), &up_trim);
+    }
+    up_rs.step = up_step;
     return play_rs_out(&up_rs, rate, up_pull, 0, l, r);
 }
 #endif

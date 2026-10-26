@@ -309,7 +309,7 @@ static void midi_send(uint32_t st, uint32_t d1, uint32_t d2)   /* USB out, from 
 }
 
 /* ---- the timer: 10 kHz key scan, milliseconds, USB at 2 kHz. It outranks the audio ISR; nested in a
- * render it only scans, counts and feeds the USB audio stream (as sloopDX main.c) */
+ * render it scans, counts, reads the headphone packets, and feeds the USB audio stream (as sloopDX main.c) */
 static volatile uint8_t in_audio;
 void fm1_timer5_irq(void)
 {
@@ -343,8 +343,12 @@ void fm1_timer5_irq(void)
     return;
 #endif
     if (in_audio) {
-        if (usb_due)
+        if (usb_due) {
+#if FELUCCA_UAC_OUT
+            uac_play_service();                         /* one OUT packet per ms, or the next overwrites it */
+#endif
             UAC_ONLY(uac_service());
+        }
         return;
     }
     if (owed & 1u)

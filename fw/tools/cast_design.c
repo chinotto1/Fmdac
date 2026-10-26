@@ -146,10 +146,12 @@ void cast_design(CastDac *d, int machine, int bits, int rate_hz, int tone_milli,
     break;
   case CAST_SP1200:
     d->law = CAST_LAW_LINEAR;
-    /* Input filter is an estimate: ~0.85 of the 13.02 kHz Nyquist, 4 poles.
-     * The published order is uncertain. Output is a hold, no reconstruction.
-     * Tone 0 leaves it that way. Any higher tone brings in a 4-pole, the way
-     * channels 3-6 are filtered and 7-8 are not.
+    /* Yeh's SP-12 paper: the input anti-alias is real, and the playback
+     * that makes the machine is a zero-order hold with no reconstruction
+     * on the bright outputs. 11070 Hz is 0.85 of the 13.02 kHz Nyquist,
+     * the estimate in the SP-1200 service notes. Tone 0 and the default
+     * tone leave the output as that hold. The other tones bring in a
+     * 4-pole, standing in for the filtered channels.
      */
     d->npre = add_butterworth(d->pre, 0, CAST_BQ_MAX, host_fs, 11070.0, 4);
     if (tone_milli > 0 && tone_milli != 500) {
@@ -157,7 +159,7 @@ void cast_design(CastDac *d, int machine, int bits, int rate_hz, int tone_milli,
     }
     break;
   case CAST_EII:
-    d->law = CAST_LAW_DPCM;
+    d->law = CAST_LAW_DPCM; /* Rossum: mu-law COMDAC on the sample difference */
     d->dc_block = 1;
     d->npre = add_butterworth(d->pre, 0, CAST_BQ_MAX, host_fs, 12000.0, 2);
     if (tone_milli == 500) {
@@ -178,9 +180,10 @@ void cast_design(CastDac *d, int machine, int bits, int rate_hz, int tone_milli,
       }
       d->npre = add_butterworth(d->pre, 0, CAST_BQ_MAX, host_fs, bw, 6);
       d->npost = add_butterworth(d->post, 0, CAST_BQ_MAX, host_fs, bw, 6);
-      /* The fixed ~21 kHz Sallen-Key only matters near the top of the band.
-       * A 6-pole already used every biquad slot, so it is omitted here and
-       * the steep switched-cap filter is the one that is modeled.
+      /* Service manual: MF6CN-50, 6 poles, clocked from the voice so the
+       * cutoff follows the sample rate, after a 2-pole Sallen-Key near
+       * 21 kHz. The 6-pole already uses every biquad, so the fixed stage
+       * is left out and the tracking filter is the one that is modeled.
        */
       (void)tone_fc;
     }

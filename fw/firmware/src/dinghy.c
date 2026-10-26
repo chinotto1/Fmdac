@@ -1,10 +1,12 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Fmdac 0.9. Four kit tracks, a sequencer, and the converter.
+/* Fmdac 0.10. Four kit tracks, a sequencer, and the converter.
  *
  *   FX     machine, bits, rate, tone. Press FX again: wet, drive, bits, rate.
- *          The law is on the headphones. While a computer streams USB audio,
- *          that stream is mixed in and converted too. 48 kHz playback is
- *          resampled to the headphone clock. USB audio also records the mix.
+ *          OFF copies the mix. The other machines are the published
+ *          converters below. While a computer streams USB audio, that
+ *          stream is mixed in. 44.1 kHz is copied. 48 kHz is interpolated
+ *          to the headphone clock, and the ratio follows the buffer.
+ *          USB audio also records the mix.
  *   HOME   the level of each kit, T1 to T4. The selected kit is marked.
  *          Press HOME again: that kit becomes MIDI, or a drum machine.
  *          A MIDI kit sends notes and stays silent here. SEL then opens

@@ -1,13 +1,12 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* The headphone resampler. A 48 kHz decay used to be read one-for-one and
- * then jumped 64 frames when the ring got ahead. That jump is the crunch. */
+/* The headphone resampler. A full ring used to skip one input frame on
+ * every read. That skip is the crunch, including with the converter off. */
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include "play_down.h"
 
-#define N 256
+#define N 512
 static int16_t ring[N];
 static uint32_t w, r;
 
@@ -16,10 +15,6 @@ static int pull(void *ctx, int16_t *l, int16_t *rgt)
     uint32_t fill;
     (void)ctx;
     fill = w - r;
-    if (fill > 96u) {
-        r++;
-        fill--;
-    }
     if (!fill) return 0;
     *l = ring[r & (N - 1u)];
     *rgt = *l;
@@ -40,7 +35,7 @@ int main(void)
     PlayRs rs;
     int32_t prev = 0, max_step = 0, old_max = 0;
     int32_t level = 0, i, out_n = 0;
-    int32_t ol, orr;
+    int32_t ol, orr, trim;
     if (PLAY_48_STEP != 71331u) {
         printf("step %u\n", PLAY_48_STEP);
         return 1;
@@ -111,12 +106,45 @@ int main(void)
     }
     printf("new max step %d, old jump %d, frames %d\n", max_step, old_max, out_n);
     if (max_step > 80 || old_max < 1000) return 1;
-    /* A high ring slips one frame per read, not 64. */
-    w = 200;
-    r = 0;
-    pull(0, &ring[0], &ring[1]);
-    if (r != 2u) {
-        printf("slip %u\n", r);
+    /* A deep ring is played in order. Skipping it is the old crunch. */
+    memset(&rs, 0, sizeof rs);
+    w = r = 0;
+    level = 0;
+    for (i = 0; i < 200; i++) {
+        ring[w & (N - 1u)] = (int16_t)level;
+        level += 20;
+        w++;
+    }
+    prev = 0;
+    max_step = 0;
+    for (i = 0; i < 80; i++) {
+        int32_t step;
+        play_rs_out(&rs, 1, pull, 0, &ol, &orr);
+        if (i) {
+            step = ol - prev;
+            if (step < 0) step = -step;
+            if (step > max_step) max_step = step;
+        }
+        prev = ol;
+    }
+    printf("deep max step %d, read %u\n", max_step, r);
+    if (max_step > 40 || r < 80u) return 1;
+    /* The lock holds a matched buffer and walks a full one toward the ratio. */
+    trim = 0;
+    if (play_lock_step(PLAY_48_STEP, 96u, &trim) != PLAY_48_STEP || trim != 0) {
+        printf("lock idle %d\n", trim);
+        return 1;
+    }
+    trim = 0;
+    for (i = 0; i < 12; i++)
+        play_lock_step(65536u, 500u, &trim);
+    printf("lock high trim %d\n", trim);
+    if (trim < 5000) return 1;
+    trim = 0;
+    for (i = 0; i < 12; i++)
+        play_lock_step(PLAY_48_STEP, 0u, &trim);
+    if (trim > -5000) {
+        printf("lock low trim %d\n", trim);
         return 1;
     }
     printf("play_rs ok\n");

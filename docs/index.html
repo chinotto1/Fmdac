@@ -18,7 +18,7 @@
         <span class="eyebrow">FM-1</span>
         <h1>Install Fmdac.</h1>
         <p>
-          Fmdac 0.9 loads with this page. Connect one FM-1 with a USB data cable, in Chrome or Edge on a computer.
+          Fmdac 0.10 loads with this page. Connect one FM-1 with a USB data cable, in Chrome or Edge on a computer.
           Leave the cable in until the page says the FM-1 came back.
         </p>
         <p>
@@ -39,10 +39,10 @@
         </p>
         <p>
           SEQ is the step grid, then a song chain of four patterns. REC while stopped writes a take of one, two, or four bars across at most four patterns and sets the BPM.
-          A song saved by 0.8 loads as the factory kits.
+          A song saved by 0.9 loads. A song saved by 0.8 loads as the factory kits.
           HOME sets each kit's level. There are no sample ROMs.
           The four sounding voices are shared, so a second kick retriggers the first.
-          While a computer streams audio to the FM-1, that audio goes through the converter to the headphones. Playback at 48 kHz is resampled to the headphone clock.
+          While a computer streams audio to the FM-1, that audio is mixed into the headphones. OFF leaves the converter out of the path. Playback at 44.1 kHz is copied. Playback at 48 kHz is interpolated to the headphone clock, and the ratio follows the buffer instead of discarding frames.
           When nothing is streaming, the headphones hear the FM-1's own mix. The computer records the headphone mix.
           Installing replaces the firmware that is on the FM-1.
         </p>
@@ -73,7 +73,7 @@
             <strong id="current-title">Fmdac</strong>
             <span id="current-badge" class="badge">Checking</span>
           </div>
-          <p id="current-reason">Loading Fmdac 0.9.</p>
+          <p id="current-reason">Loading Fmdac 0.10.</p>
           <p class="small">Source: <a id="current-source" href="https://github.com/chinotto1/Fmdac">chinotto1/Fmdac</a></p>
         </div>
         <div id="recovery-panel" hidden>
@@ -157,7 +157,7 @@
       <span class="eyebrow">Confirm</span>
       <h2 id="confirm-title">Install this firmware?</h2>
       <p id="confirm-description"></p>
-      <p id="confirm-limit">Fmdac 0.9 replaces the firmware. It is four kit tracks, and each track is eight lanes. SELECT picks the kit. On HOME the selected kit is marked, and the next HOME press chooses MIDI or a drum machine. A MIDI kit is silent locally. SEL opens 808, 909, CR-78, and SDS on a drum kit, or the map list on a MIDI kit. SELECT moves, SEL picks, and HOME closes the list. A black key picks the lane. EDIT on a drum kit is tune, decay, tone, drop, and lane levels. EDIT on a MIDI kit is the scale, the notes, and the map. K1 starts with published GM, TR-909, TR-707, TR-727, TR-08, Volca Beats, and Hammerhead notes, then the AUv3 app maps from the OCTACHRON list. A lane with no note in that chart stays silent. OneShot and Tekno are not included. It does not contain every preset stored in the OCTACHRON app. TR-707 and TR-727 stop at notes 35 through 51. Computer audio is converted to the headphones only while the computer is streaming to the FM-1. Playback at 48 kHz is resampled to the headphone clock. The drums are synthesized characters, not sample ROMs, and the four local voices are shared across the kits. REC quantizes a take of one, two, or four bars. A song saved by 0.8 loads as the factory kits.</p>
+      <p id="confirm-limit">Fmdac 0.10 replaces the firmware. It is four kit tracks, and each track is eight lanes. SELECT picks the kit. On HOME the selected kit is marked, and the next HOME press chooses MIDI or a drum machine. A MIDI kit is silent locally. SEL opens 808, 909, CR-78, and SDS on a drum kit, or the map list on a MIDI kit. SELECT moves, SEL picks, and HOME closes the list. A black key picks the lane. EDIT on a drum kit is tune, decay, tone, drop, and lane levels. EDIT on a MIDI kit is the scale, the notes, and the map. K1 starts with published GM, TR-909, TR-707, TR-727, TR-08, Volca Beats, and Hammerhead notes, then the AUv3 app maps from the OCTACHRON list. A lane with no note in that chart stays silent. OneShot and Tekno are not included. It does not contain every preset stored in the OCTACHRON app. TR-707 and TR-727 stop at notes 35 through 51. Computer audio is mixed into the headphones only while the computer is streaming to the FM-1. OFF leaves the converter out of the path. Playback at 44.1 kHz is copied. Playback at 48 kHz is interpolated to the headphone clock, and the ratio follows the buffer instead of discarding frames. The drums are synthesized characters, not sample ROMs, and the four local voices are shared across the kits. REC quantizes a take of one, two, or four bars. A song saved by 0.9 loads. A song saved by 0.8 loads as the factory kits.</p>
       <dl>
         <dt>Connected device</dt>
         <dd id="confirm-device"></dd>

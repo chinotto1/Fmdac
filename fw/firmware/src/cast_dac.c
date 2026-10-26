@@ -1,6 +1,16 @@
 /* SPDX-License-Identifier: GPL-3.0-only
  * Real-time converter. Coefficients are baked by tools/bake_cast.c.
  * tools/cast_design.c is host-only and is not part of this image.
+ *
+ * The laws follow published notes, not a sample ROM:
+ *   DX7: Ken Shirriff's BA9221 die photo and the DX7/TX7 service notes.
+ *   SP-1200: 12-bit linear at 26.04 kHz, zero-order hold, no reconstruction
+ *     on the default tone. Yeh, ICMC 2007, measured that hold on the SP-12
+ *     (the same engine). Rossum calls the pitch method drop-sample.
+ *   Emulator II: Rossum's companding DPCM. The difference uses the Bell
+ *     mu-255 shape of the COMDACs he describes. It is not a 6072 ROM dump.
+ *   S950: 12-bit, and a 6-pole reconstruction whose cutoff tracks the
+ *     sample clock, which is what the MF6CN-50 does in the service manual.
  */
 #include "cast_dac.h"
 
