@@ -13,6 +13,35 @@ export function productOf(fwsc) {
   return s;
 }
 
+function jlEnc(bytes) {
+  const out = new Uint8Array(bytes);
+  let key = 0xFFFF;
+  for (let i = 0; i < out.length; i++) {
+    out[i] ^= key & 0xFF;
+    key = ((key << 1) ^ (key & 0x8000 ? 0x1021 : 0)) & 0xFFFF;
+  }
+  return out;
+}
+
+function rd(bytes, off, n) {
+  let v = 0;
+  for (let i = 0; i < n; i++) v += bytes[off + i] * 2 ** (8 * i);
+  return v >>> 0;
+}
+
+// where flash.bin lies in a logical image, or null when the file list is absent
+export function flashSpan(img) {
+  if (!img || img.length < 0x40) return null;
+  const count = rd(jlEnc(img.subarray(0, 0x40)), 8, 2);
+  for (let i = 0; i < Math.min(count, 8) && 0x90 + i * 0x50 <= img.length; i++) {
+    const entry = jlEnc(img.subarray(0x40 + i * 0x50, 0x90 + i * 0x50));
+    const off = rd(entry, 8, 4);
+    const size = rd(entry, 12, 4);
+    if (rd(entry, 0, 2) === 0 && size && off + size <= img.length) return {off, size};
+  }
+  return null;
+}
+
 // the image the device addresses during an update: the .fwsc without the 20 marker bytes
 export function logicalImage(fwsc) {
   const out = new Uint8Array(fwsc.length - BLOCKS);

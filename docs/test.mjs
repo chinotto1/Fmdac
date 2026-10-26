@@ -2,8 +2,8 @@
 import assert from "node:assert/strict";
 import {readFile} from "node:fs/promises";
 import test from "node:test";
-import {FM1_PORT} from "./vendor/fm1ota.js";
-import {productOf, logicalImage} from "./vendor/fm1pkg.js";
+import {FM1_PORT, loaderAccepts, pack7, Updater, WriteMeter} from "./vendor/fm1ota.js";
+import {flashSpan, productOf, logicalImage} from "./vendor/fm1pkg.js";
 import {
   acceptPackage,
   assertCatalog,
@@ -85,6 +85,14 @@ test("the install button stays closed until a firmware file and the FM-1 are bot
     device: {identity: "ota-FM-1_713", name: "FM-1"},
   }), /FM-1_713/);
   assert.equal(loaderMismatch("ota-FM-1_096", "FM-1_096"), false);
+  assert.equal(loaderMismatch("ota-FM-1_015", "FM-1_016"), false);
+  assert.equal(blockReason({
+    ...ready,
+    mode: "recover",
+    release: {enabled: true, filename: "FM-1.fwsc"},
+    prepared: {product: "FM-1_016"},
+    device: {identity: "ota-FM-1_015", name: "FM-1"},
+  }), "");
   assert.equal(blockReason({
     ...ready,
     prepared,
@@ -109,6 +117,110 @@ test("the published catalog is complete and the page file matches it", async () 
   assert.equal(checked.product, "FM-1_969");
   assert.equal(productOf(bytes), "FM-1_969");
   assert.equal(logicalImage(bytes).length, bytes.length - 20);
+});
+
+function jlEnc(src) {
+  const out = new Uint8Array(src);
+  let key = 0xFFFF;
+  for (let i = 0; i < out.length; i++) {
+    out[i] ^= key & 0xFF;
+    key = ((key << 1) ^ (key & 0x8000 ? 0x1021 : 0)) & 0xFFFF;
+  }
+  return out;
+}
+
+function imageWithFlash(off, size) {
+  const img = new Uint8Array(off + size);
+  const header = new Uint8Array(0x40);
+  header[8] = 1;
+  img.set(jlEnc(header), 0);
+  const entry = new Uint8Array(0x50);
+  entry[8] = off & 255;
+  entry[9] = (off >>> 8) & 255;
+  entry[10] = (off >>> 16) & 255;
+  entry[11] = (off >>> 24) & 255;
+  entry[12] = size & 255;
+  entry[13] = (size >>> 8) & 255;
+  entry[14] = (size >>> 16) & 255;
+  entry[15] = (size >>> 24) & 255;
+  img.set(jlEnc(entry), 0x40);
+  return img;
+}
+
+function request(addr, len, lengthByte = 8) {
+  const body = [0x00, 0x59, 0x30, lengthByte, 0, 0, 0,
+    addr & 255, (addr >>> 8) & 255, (addr >>> 16) & 255, (addr >>> 24) & 255,
+    len & 255, (len >>> 8) & 255, (len >>> 16) & 255];
+  let sum = 0;
+  for (let i = 6; i < body.length; i++) sum += body[i];
+  body.push((~sum) & 255);
+  return [0xF0, ...pack7(body), 0xF7];
+}
+
+function fakeLink(packets) {
+  return {
+    lost: false,
+    sent: [],
+    q: [...packets],
+    send(bytes) { this.sent.push(bytes); return true; },
+    async read() { return this.q.shift() || null; },
+    async close() {},
+  };
+}
+
+test("a stock update loader can finish the official package", () => {
+  assert.equal(loaderAccepts("ota-FM-1_015", "FM-1_016"), true);
+  assert.equal(loaderAccepts("ota-FM-1_969", "FM-1_969"), true);
+  assert.equal(loaderAccepts("ota-FM-1_969", "FM-1_016"), false);
+  assert.equal(loaderAccepts("ota-FM-1_713", "FM-1_096"), false);
+});
+
+test("the official loader's downward read keeps the progress moving", () => {
+  const image = imageWithFlash(0x100, 0x9000);
+  assert.deepEqual(flashSpan(image), {off: 0x100, size: 0x9000});
+  const meter = new WriteMeter(image);
+  for (let i = 0; i < 8; i++) assert.equal(meter.add(0x100 + 0x8000 - i * 0x200, 0x200), 0);
+  let prev = 0;
+  for (let i = 8; i < 12; i++) {
+    const pct = meter.add(0x100 + 0x8000 - i * 0x200, 0x200);
+    assert.ok(pct > prev);
+    prev = pct;
+  }
+});
+
+test("a check address during the write does not end the update", async () => {
+  const link = fakeLink([
+    request(0, 16),
+    request(0xE0000000, 8),
+    request(16, 16, 9),
+    request(0xF0000000, 8),
+  ]);
+  const result = await new Updater(null, null, {settle: 0}).serve(link, new Uint8Array(64), 0xF0000000, 200, () => {});
+  assert.equal(result.finished, true);
+  assert.equal(result.served, 2);
+  assert.equal(link.sent.length, 4);
+});
+
+test("a restarted stock loader is picked up and the write finishes", async () => {
+  const updater = new Updater(null, null, {settle: 0, idle: 40, resumeMax: 2, resumeWait: 20});
+  updater.find = async () => ({
+    id: {text: "ota-FM-1_015", model: "ota-FM-1"},
+    link: fakeLink([request(0xF0000000, 8)]),
+  });
+  const result = await updater.writeResuming({
+    id: {text: "ota-FM-1_015"},
+    link: fakeLink([request(0, 8)]),
+  }, new Uint8Array(32), () => {}, "FM-1_016");
+  assert.equal(result.finished, true);
+});
+
+test("the official package is not written by another firmware's loader", async () => {
+  let sent = false;
+  await assert.rejects(() => new Updater(null).write({
+    id: {text: "ota-FM-1_969"},
+    link: {send() { sent = true; return true; }, async close() {}},
+  }, new Uint8Array(8), () => {}, "FM-1_016"), /matching package/);
+  assert.equal(sent, false);
 });
 
 test("the page can see an FM-1 that introduces itself as Fmdac", () => {

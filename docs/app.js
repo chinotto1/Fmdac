@@ -278,20 +278,21 @@ function transferStep(stage, detail) {
     verify: "The FM-1 is checking the package",
     loader: "Waiting for update mode",
     write: "Writing firmware. Keep the cable connected.",
+    dropped: "The update loader restarted. Waiting for it.",
+    resume: "Continuing the write",
     reboot: "Waiting for the FM-1 to restart",
     done: "The FM-1 came back with the expected identity",
   };
   $("transfer-stage").textContent = labels[stage] || stage;
   let value = {start: 3, verify: 8, loader: 12, reboot: 96, done: 100}[stage];
-  if (stage === "write") {
-    const end = detail?.end || 0;
-    value = 15 + Math.min(1, end / prepared.image.length) * 78;
-  }
+  if (stage === "write") value = 15 + Math.min(99, Number(detail) || 0) * 0.78;
   $("progress").value = Math.max(Number($("progress").value) || 0, value || 0);
   $("transfer-percent").textContent = `${Math.floor($("progress").value)}%`;
   $("transfer-help").textContent = stage === "done"
     ? `The FM-1 reports ${detail}. Check the screen.`
-    : "Keep the cable connected and the computer awake. If this stops, use this same file to finish.";
+    : stage === "dropped"
+      ? "Leave the cable in. The FM-1 stays in update mode, and this page continues when the loader answers."
+      : "Keep the cable connected and the computer awake. If this stops, connect again and finish this same file.";
   if (stage !== "verify" && stage !== "write") log(`Stage ${stage}${typeof detail === "string" ? ` · ${detail}` : ""}`);
 }
 

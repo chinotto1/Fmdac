@@ -14,4 +14,9 @@ that name is offered the same identity handshake as the other names in the
 pattern. The page still installs only after the device answers with an
 `FM-1_###` identity and the chosen package has been checked.
 
+M-VAVE's own update loader can report a stock identity such as `ota-FM-1_015`
+while the package is a later official build. The page accepts that stock
+loader for a stock package, answers either finish address, and continues the
+write if the loader restarts. A community loader still has to match its package.
+
 No Skiff, SLOOP, or M-VAVE firmware binaries are bundled.

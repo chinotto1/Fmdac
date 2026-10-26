@@ -46,7 +46,7 @@
       "sha256": "d017fb65e70aca97ee29d944470c3515a74581df5c0576bf70de917c7b2b61d5",
       "filename": "FM-1.fwsc",
       "download": "https://yms-file-store.oss-cn-hongkong.aliyuncs.com/software/firmware/FM-1.fwsc",
-      "description": "The FM-1.fwsc from M-VAVE's download on October 25, 2026. Its identity is FM-1_016. If a newer download no longer matches this checksum, choose that file on the Fmdac tab: its identity is shown before anything is written."
+      "description": "The FM-1.fwsc from M-VAVE's download on October 25, 2026. Its identity is FM-1_016. If a newer download no longer matches this checksum, choose that file on the Fmdac tab: its identity is shown before anything is written. If the write stops, the FM-1 stays in update mode. Its loader can report an earlier FM-1 name, such as ota-FM-1_015. Connect again and install this same file."
     }
   ]
 }

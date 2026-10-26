@@ -6,6 +6,12 @@
 // or Felucca) reads parts of the package and stages the update loader. Step 2:
 // the loader reads the whole image and writes it. Both steps are "the device
 // asks, we answer": cmd 0x30 read requests on the logical image.
+//
+// M-VAVE's loader reports a stock identity such as ota-FM-1_015, reads the
+// image once from the top downward, and can restart in the middle of a write.
+// A return to the official package stays with that loader and continues.
+
+import {flashSpan} from "./fm1pkg.js";
 
 const HS_QUERY = [0xF0, 0x00, 0x32, 0x45, 0x00, 0x00, 0x00, 0x40, 0x7F, 0xF7];
 const UPGRADE = [0xF0, 0x22, 0x24, 0x35, 0x7F, 0xF7];
@@ -13,9 +19,60 @@ const MAXDATA = 512;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const IS_OTA = (id) => /^ota-/i.test(id.model);
 // Local changes: explicit FM-1 identities, matching input/output ports, selected
-// device checks, checksummed replies, exact loader/product matching, bounded
+// device checks, checksummed replies, stock-loader acceptance, bounded
 // requests, cleanup on failure and final identity verification for every update.
 export const FM1_PORT = /fm[- ]?1|fmdac|felucca|skiff|sloop|clipper|fzfm|ota|composite|sinco|usb-midi/i;
+
+function versionOf(text) {
+  const m = /^((?:ota-)?FM-1)_(\d+)$/i.exec(text || "");
+  return m ? parseInt(m[2], 10) : null;
+}
+
+// The running update loader may finish this package. An exact ota-<product>
+// match is the Felucca-family loader. Stock packages also accept M-VAVE's
+// loader when both identities are below FM-1_100.
+export function loaderAccepts(identity, product) {
+  if (!identity?.startsWith("ota-") || !product) return false;
+  if (identity === `ota-${product}`) return true;
+  const loader = versionOf(identity);
+  const pkg = versionOf(product);
+  return loader !== null && pkg !== null && loader < 100 && pkg < 100;
+}
+
+// Step 2's percentage, forward only. Felucca's loader reads flash.bin twice,
+// upward. M-VAVE's reads it once, downward. The first reads past the 16 KiB
+// head tell which; until then the meter stays at 0.
+export class WriteMeter {
+  constructor(image) {
+    this.span = flashSpan(image);
+    this.len = image.length;
+    this.done = 0;
+    this.total = 0;
+    this.pct = 0;
+    this.seen = [];
+  }
+  add(addr, n) {
+    let p;
+    if (!this.span) p = Math.floor((addr + n) * 100 / this.len);
+    else {
+      const {off: lo, size} = this.span;
+      if (addr < lo || addr >= lo + size) return this.pct;
+      this.done += n;
+      const o = addr - lo;
+      if (!this.total && o >= 0x4000 && (!this.seen.length || o !== this.seen[this.seen.length - 1])) {
+        this.seen.push(o);
+        if (this.seen.length > 8) {
+          let up = 0;
+          for (let i = 1; i < this.seen.length; i++) if (this.seen[i] > this.seen[i - 1]) up++;
+          this.total = up * 2 > 8 ? 2 * size - 0x4000 : size;
+        }
+      }
+      p = this.total ? Math.floor(this.done * 100 / this.total) : 0;
+    }
+    this.pct = Math.max(this.pct, Math.min(99, p));
+    return this.pct;
+  }
+}
 
 // errors carry a code the pages translate: notfound, model, stopped, noloader, lost, noreturn,
 // mismatch (detail: the identity the device reports), badreq
@@ -54,7 +111,7 @@ function response(addr, data, fl = 0) {
 function parseRequest(pkt) {
   if (pkt[0] !== 0xF0 || pkt[pkt.length - 1] !== 0xF7) return null;
   const u = unpack7(pkt.slice(1, -1));
-  if (u.length !== 15 || u[0] !== 0 || u[1] !== 0x59 || u[2] !== 0x30 || u[3] !== 8 || u[4] || u[5]) return null;
+  if (u.length !== 15 || u[0] !== 0 || u[1] !== 0x59 || u[2] !== 0x30) return null;
   let s = 0;
   for (let i = 6; i < 14; i++) s += u[i];
   if ((~s & 0xFF) !== u[14]) return null;
@@ -67,7 +124,7 @@ function parseIdentity(pkt) {
   if (d.length !== 34 || d[0] !== 0 || d[1] !== 0x59 || d[2] !== 0x11 || d[3] !== 27 || d[4] || d[5]) return null;
   if ((~d.slice(6, 33).reduce((a, b) => a + b, 0) & 0xFF) !== d[33]) return null;
   const txt = String.fromCharCode(...d.slice(6, 33)).replace(/\0+$/, "");
-  const m = /^((?:ota-)?FM-1)_(\d{3})$/i.exec(txt);
+  const m = /^((?:ota-)?FM-1)_(\d+)$/i.exec(txt);
   return m ? { text: txt, model: m[1], version: parseInt(m[2], 10) } : null;
 }
 
@@ -124,7 +181,7 @@ export class Updater {
   constructor(access, log, timing = {}) {
     this.access = access;
     this.log = log || (() => {});
-    this.timing = {settle:2000, handover:3000, loader:30000, reboot:40000, idle:180000, ...timing};
+    this.timing = {settle:2000, handover:3000, loader:30000, reboot:40000, idle:180000, resumeWait:120000, resumeMax:5, ...timing};
   }
 
   // every in/out pair with the same port name that answers the handshake
@@ -179,12 +236,12 @@ export class Updater {
       if (!r) continue;
       last = Date.now();
       if (r.addr === 0xE0000000 || r.addr === 0xF0000000) {
-        if (r.addr !== finishAddr) throw fail("badreq", "The device completed the wrong update stage.");
         if (!link.send(response(r.addr, [...new TextEncoder().encode("success"), 0])))
           return { served, finished: false, lost: true };
-        return { served, finished: true };
+        if (r.addr === finishAddr) return { served, finished: true };
+        continue;
       }
-      if (!r.len || r.len > MAXDATA || r.addr + r.len > image.length) throw fail("badreq", `bad request ${r.addr.toString(16)}+${r.len}`);
+      if (r.len > MAXDATA || r.addr + r.len > image.length) throw fail("badreq", `bad request ${r.addr.toString(16)}+${r.len}`);
       await sleep(10);
       if (!link.send(response(r.addr, Array.from(image.subarray(r.addr, r.addr + r.len)), r.fl))) {
         return { served, finished: false, lost: true };
@@ -214,9 +271,15 @@ export class Updater {
     if (!s1.finished) throw fail(s1.lost ? "lost" : "stopped", `the device ${s1.lost ? "was disconnected" : "stopped"} after ${s1.served} requests: nothing was written`);
     step("loader");
     await sleep(this.timing.handover);
-    const ota = await this.waitFor((id) => id.text === "ota-" + product, this.timing.loader);
+    const ota = await this.waitFor(IS_OTA, this.timing.loader);
     if (!ota) throw fail("noloader", "the update loader did not appear. Replug the USB cable and press Install again: the device stays in update mode until it is finished.");
-    const s2 = await this.write(ota, image, step, product);
+    if (!loaderAccepts(ota.id.text, product)) {
+      const reported = ota.id.text;
+      await ota.link.close();
+      throw fail("foreign", `The FM-1 is in the update mode of ${reported}. Finish that update with its matching package. This file is ${product}.`, reported);
+    }
+    step("loader", ota.id.text);
+    const s2 = await this.writeResuming(ota, image, step, product);
     if (!s2.finished) throw fail(s2.lost ? "lost" : "stopped", `the loader ${s2.lost ? "was disconnected" : "stopped"} after ${s2.served} requests. Replug and press Install again to resume.`);
     step("reboot");
     await sleep(this.timing.handover);
@@ -228,15 +291,34 @@ export class Updater {
     return back.id.text;
   }
 
-  // step 2 with the loader found by find()/waitFor()
+  // step 2 with the loader found by find()/waitFor(). step("write", percent)
   async write(ota, image, step, product) {
     try {
-      if (ota.id.text !== "ota-" + product)
+      if (!loaderAccepts(ota.id.text, product))
         throw fail("foreign", `Finish ${ota.id.text.replace(/^ota-/, "")} with its own matching package before changing firmware.`, ota.id.text);
       if (!ota.link.send(UPGRADE)) throw fail("lost", "The update loader disconnected.");
       await sleep(this.timing.settle);
-      return await this.serve(ota.link, image, 0xF0000000, this.timing.idle, (n, addr, len) => step("write", {requests:n, end:addr+len}));
+      const meter = new WriteMeter(image);
+      return await this.serve(ota.link, image, 0xF0000000, this.timing.idle, (n, addr, len) => step("write", meter.add(addr, len)));
     } finally { await ota.link.close(); }
+  }
+
+  // The official loader can drop the USB port and come back still in update mode.
+  // Wait for that same family of loader and continue the write.
+  async writeResuming(ota, image, step, product) {
+    let current = ota;
+    const tries = this.timing.resumeMax;
+    for (let t = 1; t <= tries; t++) {
+      if (t > 1) {
+        step("dropped");
+        current = await this.waitFor((id) => loaderAccepts(id.text, product), this.timing.resumeWait);
+        if (!current) return {served: 0, finished: false, lost: true};
+        step("resume", t);
+      }
+      const result = await this.write(current, image, step, product);
+      if (result.finished || t === tries) return result;
+    }
+    return {served: 0, finished: false};
   }
 
   // resume: the device is already in update mode (loader) -> true when the write finished
@@ -247,7 +329,7 @@ export class Updater {
     if (!ota) return false;
     if (expectedPorts && (ota.link.input.id !== expectedPorts[0] || ota.link.output.id !== expectedPorts[1])) { await ota.link.close(); throw fail("changed", "The selected MIDI update device changed. Connect and review it again."); }
     const step = onStep || (() => {});
-    const result = await this.write(ota, image, step, product);
+    const result = await this.writeResuming(ota, image, step, product);
     if (!result.finished) return false;
     if (product) {
       step("reboot");

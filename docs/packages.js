@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+import {loaderAccepts} from "./vendor/fm1ota.js";
 import {productOf, logicalImage, sha256hex} from "./vendor/fm1pkg.js";
 
 export const MAX_PACKAGE_BYTES = 2 * 1024 * 1024;
@@ -77,7 +78,7 @@ export async function acceptPackage(bytes, release, pinned) {
 }
 
 export function loaderMismatch(identity, product) {
-  return Boolean(identity?.startsWith("ota-") && identity !== `ota-${product}`);
+  return Boolean(identity?.startsWith("ota-") && !loaderAccepts(identity, product));
 }
 
 export function blockReason({catalogReady, supported, mode, release, prepared, device}) {
