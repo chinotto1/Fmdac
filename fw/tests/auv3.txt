@@ -1,4 +1,4 @@
-# Fmdac 0.7. K1 reaches the AUv3 app maps after the seven original charts.
+# Fmdac 0.8. K1 reaches the AUv3 app maps after the seven original charts.
 # GM8 is index 18: D# is lane 4, mid tom 47, channel 10.
 # HAMR2 is index 20: F# is lane 2, clap 39, the app row order.
 # RUIS is index 32: C is kick 49.

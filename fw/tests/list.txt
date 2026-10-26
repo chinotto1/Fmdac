@@ -1,0 +1,39 @@
+# Fmdac 0.8. SEL opens the map list. SELECT moves. SEL picks. HOME closes.
+# RUIS is index 32: C is kick 49 on channel 1. K1 does nothing while the list is open.
+# HOME leaves the GM kit alone. Picking the map that is already loaded keeps an edited note.
+40 btn 3
+80 shot
+120 enc 0 -1
+160 shot
+200 enc 0 32
+240 shot
+280 enc 2 5
+320 btn 8
+360 shot
+400 keys 128
+480 keys 0
+520 btn 3
+560 btn 2
+600 shot
+640 btn 3
+680 btn 11
+720 shot
+760 btn 3
+800 enc 0 32
+840 btn 3
+880 shot
+920 btn 2
+960 keys 128
+1040 keys 0
+1080 enc 0 1
+1120 shot
+1160 btn 6
+1200 btn 6
+1240 btn 6
+1280 enc 4 4
+1320 btn 3
+1360 btn 3
+1400 keys 128
+1480 keys 0
+1520 shot
+1640 end

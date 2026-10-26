@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Fmdac 0.7. Four kit tracks, a sequencer, and the converter.
+/* Fmdac 0.8. Four kit tracks, a sequencer, and the converter.
  *
  *   FX     machine, bits, rate, tone. Press FX again: wet, drive, bits, rate.
  *          The law is on the headphones. While a computer streams USB audio,
@@ -20,10 +20,12 @@
  *          notes of four lanes. Press EDIT again: this kit's map.
  *          K1 keeps GM, TR-909, TR-707, TR-727, TR-08, Volca Beats, and
  *          the grouped Hammerhead list, then the AUv3 app maps from the
- *          OCTACHRON list. The app notes are the public chart that
- *          matches the lists its author posted. A blank lane sends
- *          nothing. OneShot and Tekno have no fixed published chart.
- *          This is not every preset stored inside the OCTACHRON app.
+ *          OCTACHRON list. SEL opens that same list on any page. SELECT
+ *          moves, SEL picks, and HOME closes it without changing the kit.
+ *          The app notes are the public chart that matches the lists its
+ *          author posted. A blank lane sends nothing. OneShot and Tekno
+ *          have no fixed published chart. This is not every preset stored
+ *          inside the OCTACHRON app.
  *   ARP    up, down, up-down, random, chord, and as-played. Press ARP again
  *          to latch the held keys. The keys play the sine only on this page.
  *   LFO    MIDI CC, and level or tune on this mix when DEST says so.
@@ -34,7 +36,8 @@
  *   pattern and sets the tempo. REC while playing overdubs the playhead.
  *   PLAY then plays that quantized pattern. It is not a free looper.
  *   Tracks: T1 T2 T3 T4. Each is a whole kit: eight lanes, its own map,
- *   MIDI channel, level, and drum character. SELECT and SEL change the kit.
+ *   MIDI channel, level, and drum character. SELECT changes the kit.
+ *   SEL opens the map list. The list is not stored.
  *   All four play together. The sounding drums are four voices, one per
  *   kind of hit, shared by the kits. A second kick retriggers the first.
  *
@@ -914,6 +917,7 @@ static void fx_apply(int reset_state) {
 }
 
 static uint8_t paint_req = 1, hint_req, skip_keys;
+static uint8_t list_on, list_sel, list_top;
 static const char *msg;
 static uint32_t msg_until;
 static char msgbuf[24];
@@ -1189,7 +1193,8 @@ static void draw_song(void) {
 static void header_text(char *d) {
     const char *name = "FX";
     uint32_t n, tr = trk();
-    if (page == PG_FX && fx_alt) name = "WET";
+    if (list_on) name = "MAPS";
+    else if (page == PG_FX && fx_alt) name = "WET";
     else if (page == PG_HOME) name = "HOME";
     else if (page == PG_SEQ && seq_view == VW_SONG) name = "SONG";
     else if (page == PG_SEQ) name = "GRID";
@@ -1203,11 +1208,11 @@ static void header_text(char *d) {
     else if (page == PG_GLO) name = "GLO";
     n = put_str(d, 40, 0, " ");
     n = put_str(d, 40, n, name);
-    if (page == PG_HOME) {
+    if (!list_on && page == PG_HOME) {
         uint32_t eng = set.kit[tr].engine;
         n = put_str(d, 40, n, " ");
         n = put_str(d, 40, n, ENG[eng > 3u ? 0u : eng]);
-    } else if (page == PG_EDIT && edit_alt == 2u) {
+    } else if (!list_on && page == PG_EDIT && edit_alt == 2u) {
         n = put_str(d, 40, n, " ");
         n = put_str(d, 40, n, map_of(set.kit[tr].map)->name);
     }
@@ -1218,6 +1223,14 @@ static void header_text(char *d) {
 }
 static void status_text(char *d) {
     uint32_t n, tr = trk();
+    if (list_on) {
+        const MapDef *k = map_of(list_sel);
+        n = put_str(d, 40, 0, " ");
+        n = put_str(d, 40, n, k->name);
+        n = put_str(d, 40, n, "  CH ");
+        put_u_at(d, 40, n, k->ch);
+        return;
+    }
     n = put_str(d, 40, 0, " ");
     n = put_str(d, 40, n, trk_name(tr));
     n = put_str(d, 40, n, " ");
@@ -1238,6 +1251,7 @@ static void status_text(char *d) {
 }
 static const char *hint_text(void) {
     if (msg_on()) return msg;
+    if (list_on) return " SELECT MOVES  SEL PICKS";
     if (page == PG_FX && fx_alt) return " PRESS FX FOR THE LAW";
     if (page == PG_FX) return " USB IN GOES TO PHONES";
     if (page == PG_HOME) {
@@ -1258,13 +1272,110 @@ static const char *hint_text(void) {
     return " OCT+ TWICE CLEARS";
 }
 
+/* Ten rows in the 192 px between the header and the status line. The
+ * canvas is 240 by 64, so the rows go out in strips of three. */
+#define LIST_SHOWN 10u
+#define LIST_RH 19u
+#define LIST_Y 16u
+static void list_clamp(void) {
+    uint32_t n = NMAP ? NMAP : 1u;
+    uint32_t sel = list_sel, top = list_top;
+    if (sel >= n) sel = n - 1u;
+    if (sel < top) top = sel;
+    if (n > LIST_SHOWN && sel >= top + LIST_SHOWN) top = sel + 1u - LIST_SHOWN;
+    if (n <= LIST_SHOWN) top = 0;
+    else if (top > n - LIST_SHOWN) top = n - LIST_SHOWN;
+    list_sel = (uint8_t)sel;
+    list_top = (uint8_t)top;
+}
+static void list_open(void) {
+    uint32_t m = set.kit[trk()].map;
+    if (m >= NMAP) m = 0;
+    list_sel = (uint8_t)m;
+    list_top = (uint8_t)(m > 2u ? m - 2u : 0u);
+    list_on = 1;
+    list_clamp();
+    paint_req = 1;
+}
+static void list_move(int e) {
+    int s = (int)list_sel + e;
+    if (s < 0) s = 0;
+    if (s >= (int)NMAP) s = (int)NMAP - 1;
+    list_sel = (uint8_t)s;
+    list_clamp();
+    paint_req = 1;
+}
+static void list_pick(void) {
+    uint32_t tr = trk(), m = list_sel;
+    if (m >= NMAP) m = 0;
+    if (set.kit[tr].map != (uint8_t)m || set.kit[tr].bank) {
+        set.kit[tr].map = (uint8_t)m;
+        set.kit[tr].bank = 0;
+        apply_map(tr);
+        dirty = 1;
+        t_change = fm1_ms;
+        message(map_of(m)->msg);
+    }
+    list_on = 0;
+    paint_req = 1;
+}
+static void list_pill(int32_t x, int32_t y, int32_t w, int32_t h, uint16_t c) {
+    cv_rect(x + 3, y, w - 6, h, c);
+    cv_rect(x, y + 3, w, h - 6, c);
+    cv_rect(x + 1, y + 1, w - 2, h - 2, c);
+}
+static void list_bar(int32_t sy, int32_t sh) {
+    uint32_t track = LIST_SHOWN * LIST_RH, th, ty;
+    int32_t y0 = (int32_t)LIST_Y - sy, y1 = (int32_t)(LIST_Y + track) - sy, a, b;
+    if (y0 < 0) y0 = 0;
+    if (y1 > sh) y1 = sh;
+    if (y1 > y0) cv_rect(232, y0, 3, y1 - y0, C_DIM);
+    if (NMAP <= LIST_SHOWN) return;
+    th = LIST_SHOWN * track / NMAP;
+    if (th < 8u) th = 8u;
+    if (th > track) th = track;
+    ty = (uint32_t)list_top * (track - th) / (NMAP - LIST_SHOWN);
+    a = (int32_t)(LIST_Y + ty) - sy;
+    b = a + (int32_t)th;
+    if (a < 0) a = 0;
+    if (b > sh) b = sh;
+    if (b > a) cv_rect(232, a, 3, b - a, C_HI);
+}
+static void draw_list(void) {
+    uint32_t strip;
+    palette_set(1);
+    list_clamp();
+    for (strip = 0; strip < 4u; strip++) {
+        uint32_t row, n = strip < 3u ? 3u : 1u;
+        uint32_t h = n * LIST_RH + (strip == 3u ? 2u : 0u);
+        uint32_t y = LIST_Y + strip * 3u * LIST_RH;
+        cv_begin(240, h, C_BLACK);
+        for (row = 0; row < n; row++) {
+            uint32_t ix = (uint32_t)list_top + strip * 3u + row;
+            int32_t ry = (int32_t)(row * LIST_RH);
+            const char *s;
+            int on;
+            if (ix >= NMAP) continue;
+            on = ix == list_sel;
+            list_pill(4, ry + 1, 222, (int32_t)LIST_RH - 2, on ? C_HI : C_LINE);
+            s = map_of(ix)->hint;
+            if (s && s[0] == ' ') s++;
+            cv_text(12, ry + 1, &FONT_S, s ? s : "", on ? C_BLACK : C_HI);
+            cv_text(214, ry + 1, &FONT_S, ">", on ? C_BLACK : C_HI);
+        }
+        list_bar((int32_t)y, (int32_t)h);
+        cv_blit(0, y);
+    }
+}
 static uint32_t stamp;
 static void paint(int full) {
     char line[40];
     uint32_t i;
     idle_ok = 1;
-    if (page == PG_SEQ) fill_seq();
-    else fill_rows();
+    if (!list_on) {
+        if (page == PG_SEQ) fill_seq();
+        else fill_rows();
+    }
     header_text(line);
 #ifdef DINGHY_HOST
     {
@@ -1275,14 +1386,15 @@ static void paint(int full) {
 #endif
     if (full) {
         draw_text_box(0, 0, 240, &FONT_S, line, C_HI, 0);
-        if (page == PG_SEQ) {
+        if (list_on) draw_list();
+        else if (page == PG_SEQ) {
             if (seq_view == VW_SONG) draw_song();
             else draw_grid();
             for (i = 0; i < 4u; i++) draw_small(i, 64u + i * 36u);
         } else {
             for (i = 0; i < 4u; i++) draw_big(i, 16u + i * 48u);
         }
-    } else if (page == PG_SEQ) {
+    } else if (!list_on && page == PG_SEQ) {
         if (seq_view == VW_SONG) draw_song();
         else draw_grid();
     }
@@ -2179,6 +2291,21 @@ static void app_main(void) {
 #endif
 
         b = fm1_input_edges(&rel);
+        if (list_on) {
+            uint32_t lp = page_of(b);
+            if (b & (1u << BTN_HOME)) {
+                list_on = 0;
+                paint_req = 1;
+                b &= ~(1u << BTN_HOME);
+            } else if (b & (1u << BTN_SEL)) {
+                list_pick();
+                b &= ~(1u << BTN_SEL);
+            } else if (lp < PG_N) {
+                list_on = 0;
+                paint_req = 1;
+                if (lp == page) b &= ~(1u << btn_for(lp));
+            }
+        }
         pg = page_of(b);
         if (pg == PG_FX && page == PG_FX) { fx_alt ^= 1u; paint_req = 1; }
         else if (pg == PG_ENV && page == PG_ENV) { env_alt ^= 1u; paint_req = 1; }
@@ -2204,7 +2331,7 @@ static void app_main(void) {
             paint_req = 1;
             message(set.arp_latch ? "LATCH ON" : "LATCH OFF");
         } else if (pg < PG_N) go(pg);
-        if (b & (1u << BTN_SEL)) track_step(1);
+        if (!list_on && (b & (1u << BTN_SEL))) list_open();
         if (b & (1u << BTN_PLAY)) transport(!seq_run, 1);
         if (b & (1u << BTN_REC)) {
             if (!seq_run) { take_commit(); paint_req = 1; }
@@ -2224,11 +2351,21 @@ static void app_main(void) {
                 } else { clear_arm = fm1_ms + 1600u; message("PRESS OCT+ TO CLEAR"); }
             } else if (set.oct < 2) { set.oct++; dirty = 1; t_change = fm1_ms; }
         }
-        if ((e = fm1_enc_take(ENC_KNOB1)) != 0) turn_page(0, e);
-        if ((e = fm1_enc_take(ENC_KNOB2)) != 0) turn_page(1, e);
-        if ((e = fm1_enc_take(ENC_KNOB3)) != 0) turn_page(2, e);
-        if ((e = fm1_enc_take(ENC_KNOB4)) != 0) turn_page(3, e);
-        if ((e = fm1_enc_take(ENC_SELECT)) != 0) track_step(e);
+        if (list_on) {
+            (void)fm1_enc_take(ENC_KNOB1);
+            (void)fm1_enc_take(ENC_KNOB2);
+            (void)fm1_enc_take(ENC_KNOB3);
+            (void)fm1_enc_take(ENC_KNOB4);
+        } else {
+            if ((e = fm1_enc_take(ENC_KNOB1)) != 0) turn_page(0, e);
+            if ((e = fm1_enc_take(ENC_KNOB2)) != 0) turn_page(1, e);
+            if ((e = fm1_enc_take(ENC_KNOB3)) != 0) turn_page(2, e);
+            if ((e = fm1_enc_take(ENC_KNOB4)) != 0) turn_page(3, e);
+        }
+        if ((e = fm1_enc_take(ENC_SELECT)) != 0) {
+            if (list_on) list_move(e);
+            else track_step(e);
+        }
         if ((e = fm1_enc_take(ENC_PRESETS)) != 0) {
             int p = (int)set.pattern + e;
             while (p < 0) p += (int)NPAT;
@@ -2241,6 +2378,7 @@ static void app_main(void) {
         }
 
         for (k = 0; k < PG_N; k++) fm1_led_key(btn_for(k), k == page);
+        fm1_led_key(BTN_SEL, list_on);
         fm1_led_key(BTN_PLAY, seq_run);
         fm1_led_key(BTN_REC, rec);
         fm1_led_key(BTN_OCT_DOWN, set.oct < 0);

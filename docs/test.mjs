@@ -100,14 +100,14 @@ test("the install button stays closed until a firmware file and the FM-1 are bot
 test("the published catalog is complete and the page file matches it", async () => {
   const catalog = assertCatalog(JSON.parse(await readFile(new URL("./releases.json", import.meta.url), "utf8")));
   assert.equal(catalog.current.enabled, true);
-  assert.equal(catalog.current.product, "FM-1_967");
+  assert.equal(catalog.current.product, "FM-1_968");
   assert.equal(catalog.current.filename, "fmdac.fwsc");
   assert.equal(catalog.recovery.length, 3);
   assert.deepEqual(catalog.recovery.map((release) => release.product), ["FM-1_713", "FM-1_900", "FM-1_016"]);
   const bytes = new Uint8Array(await readFile(new URL("./fmdac.fwsc", import.meta.url)));
   const checked = await validatePinned(bytes, catalog.current);
-  assert.equal(checked.product, "FM-1_967");
-  assert.equal(productOf(bytes), "FM-1_967");
+  assert.equal(checked.product, "FM-1_968");
+  assert.equal(productOf(bytes), "FM-1_968");
   assert.equal(logicalImage(bytes).length, bytes.length - 20);
 });
 
